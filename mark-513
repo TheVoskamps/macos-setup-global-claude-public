@@ -1,0 +1,7 @@
+{
+  // SKILL.md files lead with YAML front-matter (the harness reads
+  // `name:`/`description:`), not an H1, so MD041 (first-line-h1) does not
+  // apply. Re-enabled for the prose docs under skills/lib/ via
+  // skills/lib/.markdownlint.jsonc.
+  "MD041": false
+}

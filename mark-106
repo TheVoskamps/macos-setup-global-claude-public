@@ -1,0 +1,6 @@
+---
+name: issue-add
+description: Create a new issue in this repo with proposed metadata.
+---
+
+Please add an issue in this repo with a meaningful title and description of this problem and as much detail as you need to later pick this up. If it's the infra repo assign it to me, otherwise ask me if you should. Propose Type and Label and whether or not to set the project status to Backlog, Todo, or InProgress.

@@ -1,0 +1,451 @@
+# Claude Code Bash PreToolUse Teaching Hook — Design Document
+
+**Status:** Top-level design, pre-implementation
+**Author:** Edwin (with Claude)
+**Date:** 2026-05-07
+
+---
+
+## 1. Purpose
+
+Design a `PreToolUse` hook for Claude Code that sits in front of the built-in Bash permission harness, parses each candidate command with a real bash parser, identifies constructs the harness is known to mishandle, and returns structured feedback to Claude explaining what to avoid and what to use instead. The hook is a *teaching layer*, not a replacement for the harness.
+
+Secondary goal: produce an empirical corpus of `(command, AST, harness divergence)` tuples so the catalog of known-bad constructs can grow as Claude Code itself evolves.
+
+---
+
+## 2. Background — what Claude Code's permission harness actually is
+
+Public documentation describes the surface behavior. The detailed architecture became visible after the late-March 2026 source leak and the writeups that followed (Straiker, Adversa, the `instructkr/claude-code` zread mirror). The harness, located in `tools/BashTool/bashSecurity.ts`, has roughly this structure:
+
+```mermaid
+flowchart TD
+    A[Bash tool invocation] --> B{tree-sitter-bash<br/>WASM available?}
+    B -->|yes| C[AST parse]
+    B -->|no, or parse error| D[Regex validator chain<br/>~25 validators]
+    C --> E[Visitor walks AST<br/>switch on node.type]
+    E --> F[checkSemantics<br/>post-argv validation]
+    D --> F
+    F --> G{Permission rules<br/>deny / ask / allow}
+    G -->|allow| H[Sandbox wrap & execute]
+    G -->|deny| I[Reject]
+    G -->|ask| J[Prompt user / classifier]
+```
+
+Three things matter for this design:
+
+1. The **primary gate is a tree-sitter visitor** — pattern-matching on `node.type` with a `switch` statement. Missing cases produce warnings like `node ';' not recognized`.
+2. There is a **regex fallback chain** of ~25 validators that runs when the AST path fails. The two paths have different correctness properties.
+3. The harness ships **multiple splitters** — `splitCommand_DEPRECATED`, `tryParseShellCommand`, `ParsedCommand.parse` — with different edge-case behavior. Several documented validators (`validateBackslashEscapedOperators`, `validateCommentQuoteDesync`, `validateBackslashEscapedWhitespace`) exist specifically to paper over differentials between these splitters and actual bash semantics.
+
+---
+
+## 3. Problem statement
+
+The harness's parser stack has structural fragility that surfaces as both correctness bugs (compound commands not matching prefix rules even when every component is allowed) and security bugs (the 50-subcommand cap CVE that bypassed deny rules entirely until v2.1.90).
+
+For an end user driving Claude Code daily:
+
+- Compound commands like `ls | grep foo` don't match `Bash(ls *)` + `Bash(grep *)` and prompt unnecessarily.
+- Edge cases like `find -exec ... \;` cause the warning `node ';' not recognized` and unpredictable approval behavior.
+- Quoted Windows paths with pipes never match "always allow" entries.
+- The model has no way to learn what the harness will mishandle — it just sees "permission required" and re-prompts.
+
+We can't fix the harness. We can fix the *information flow* between the harness and the model.
+
+---
+
+## 4. Parser issues — why the harness gets this wrong
+
+### 4.1 Architectural mismatch
+
+```mermaid
+flowchart LR
+    subgraph "What the harness uses"
+        TS[tree-sitter-bash<br/>GLR parser, WASM] --> V[Visitor with switch on node.type]
+        V --> SC[Security decisions]
+    end
+
+    subgraph "What this job needs"
+        L[Lexer] --> P[Recursive descent parser]
+        P --> AST[Typed AST<br/>exhaustive variants]
+        AST --> EX[Exhaustiveness-checked walker]
+        EX --> SD[Security decisions]
+    end
+```
+
+tree-sitter is a **GLR parser optimized for editor highlighting**. Its design priorities are incremental reparse, error recovery, and partial trees — exactly what you want when a developer is mid-keystroke in a buffer. They are exactly the *opposite* of what you want at a security gate, where you want unambiguous rejection of anything you can't fully analyze.
+
+A real lexer/parser pipeline against the POSIX shell or bash manual grammar gives you:
+
+- **One source of truth.** The parser produces a tree; the security walker consumes it. There is no second tokenizer with different escape rules.
+- **Exhaustive variants.** A typed AST means the compiler tells you when a new grammar production is missing a case in your visitor. tree-sitter gives you stringly-typed `node.type` values and silent fall-through.
+- **Reject on doubt.** A real parser raises a syntax error when it can't unambiguously parse. tree-sitter produces ERROR/MISSING nodes and keeps going, which is great for editors and disastrous for security.
+
+### 4.2 Statement parsing — the concrete failure modes
+
+The bashSecurity.ts source comments themselves name the differentials. Each is a case where the harness's tokenizer disagrees with bash:
+
+| Construct | Harness sees | Bash sees | Validator |
+|---|---|---|---|
+| `cat safe.txt \; echo ~/.ssh/id_rsa` | Two commands | One `cat` reading both files | `validateBackslashEscapedOperators` |
+| `echo\ test/../../../usr/bin/touch /tmp/file` | Two tokens (`echo`, `test/...`) | One path token through directory `echo test` | `validateBackslashEscapedWhitespace` |
+| `'x'#comment` | Quoted string then comment | Word `x#comment` | `validateCommentQuoteDesync` |
+| `$'\x72\x6d'` (ANSI-C `rm`) | Caught by obfuscation check | Decoded by bash | `validateObfuscatedFlags` (but `extractQuotedContent` doesn't parse ANSI-C) |
+| 50+ subcommand pipeline | Cap hit, returns "ask" | Executes all | `MAX_SUBCOMMANDS_FOR_SECURITY_CHECK = 50` |
+
+The `node ';' not recognized` warning is a benign sibling of the above — the visitor doesn't have a case for the bare `;` separator (which tree-sitter emits as an anonymous terminal whose `.type` is the literal string `";"`). The *malicious* version of the same bug class is what landed CVE-equivalent issues in v2.1.90.
+
+### 4.3 Why this keeps happening
+
+- **The visitor is the security boundary.** Every node type the grammar can emit is a potential bypass surface. Adding a new one upstream silently degrades security downstream.
+- **tree-sitter-bash is not a faithful bash parser.** Per Pečan's `rable` benchmarks (March 2026, 1,783 test cases), tree-sitter-bash produces ERROR/MISSING nodes on valid bash around arithmetic, here-docs, extglob, and word-splitting — and that's against tree-sitter's *own* lower bar of "no ERROR nodes," not byte-equivalence.
+- **Two parser paths in production.** The legacy regex parser shipped to customers, the tree-sitter parser was internal-only. v2.1.90 closed *that* specific gap, but the dual-path pattern is endemic to the architecture.
+
+---
+
+## 5. Pros and cons of the current approach
+
+### 5.1 Why the harness team likely chose tree-sitter
+
+- **Already in the Node ecosystem.** WASM bindings exist; grammar is published; no new dependency.
+- **Ships fast.** "Block obvious bad stuff" was probably the v0 bar, not "be a security boundary."
+- **Decent for the highlight-class of analysis.** For "is this command roughly `git X`?", tree-sitter is fine.
+- **Path dependence.** Once validators accreted around the visitor, ripping out the foundation became costly.
+
+### 5.2 Why it doesn't hold up
+
+- **Grammar drift.** Every tree-sitter-bash release can introduce new node types or rename old ones. The visitor must enumerate them or fail open.
+- **Security-by-blocklist.** The validator chain is a growing list of "things that bit us." There is no positive proof of correctness.
+- **No exhaustiveness checking.** TypeScript `switch (node.type)` is stringly-typed. The compiler cannot enforce "every node type has a case."
+- **Two parsing paths.** Any divergence between them is a bypass class.
+- **Performance cap as security policy.** The 50-subcommand cap was a perf decision that became a security policy by accident.
+
+---
+
+## 6. Possible solutions considered
+
+```mermaid
+flowchart TD
+    P[Problem: harness misparses bash] --> S1[1. Fork & replace harness]
+    P --> S2[2. Fix harness upstream]
+    P --> S3[3. PreToolUse teaching hook]
+    P --> S4[4. Use --dangerously-skip-permissions + sandbox]
+
+    S1 --> S1C[❌ Reverse-engineering<br/>moving target]
+    S2 --> S2C[❌ Long feedback loop<br/>not our codebase]
+    S3 --> S3C[✓ Documented seam<br/>✓ Empirical catalog<br/>✓ Composable]
+    S4 --> S4C[❌ Loses granular control<br/>❌ User pattern Edwin avoids]
+```
+
+### Option 1 — Fork & replace the permission harness
+
+Rejected. The leaked source was a single point-in-time snapshot. Internal architecture moves between versions (v2.1.90 already changed the deny-rule logic). A replacement built against a stale map silently drifts from what Claude Code actually enforces — *worse* than the original bugs because at least the originals are Anthropic's to fix.
+
+### Option 2 — Fix the harness upstream
+
+The right long-term answer but not actionable for our timeline. We can file issues; we can't merge changes.
+
+### Option 3 — PreToolUse teaching hook (chosen)
+
+The `PreToolUse` hook is a **documented, stable extension point**. It runs before the harness, can deny with a structured `reason` shown to Claude, and respects deny-first precedence (a hook `allow` cannot bypass a configured deny rule). This gives us a place to:
+
+- Parse with a real parser.
+- Detect known-misparsed constructs.
+- Emit specific, actionable feedback to the model.
+- Build a corpus of decisions for empirical analysis.
+
+### Option 4 — Bypass mode plus sandbox
+
+Doesn't address the problem. We'd lose granular control and inherit different failure modes. Not the chosen direction for ExampleProject work.
+
+---
+
+## 7. Chosen approach — `PreToolUse` teaching layer
+
+### 7.1 Operating principles
+
+1. **Narrow lane.** The hook detects known-misparsed constructs and tells Claude how to rewrite them. It does *not* re-implement allow/deny policy.
+2. **Authoritative parser.** Use `mvdan.cc/sh` (Go) or `rable` (Rust) — a real recursive-descent parser with a typed AST. Subprocess overhead is unacceptable; this must be in-process.
+3. **Feedback is the product.** The `reason` string is what the model reads. Investing in template quality compounds with every divergence detected.
+4. **Empirical catalog.** New divergences are discovered by observation, not derivation. The decision log is a first-class output.
+5. **Fail closed on parser failure.** A construct we can't analyze is denied with "please simplify or split." Configurable, but default-secure.
+
+### 7.2 Sequence
+
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code
+    participant H as Hook binary
+    participant P as Parser (mvdan.cc/sh)
+    participant A as Analyzer
+    participant L as Decision log
+    participant PH as Permission harness
+
+    CC->>H: stdin: {tool, command, ...}
+    H->>P: parse(command)
+    alt parse error
+        P-->>H: error
+        H->>L: append {decision: deny, reason: "parse failed"}
+        H-->>CC: stdout: {decision: deny, reason}
+    else parse success
+        P-->>H: AST
+        H->>A: analyze(AST)
+        A-->>H: []Divergence
+        alt no divergences
+            H->>L: append {decision: passthrough}
+            H-->>CC: stdout: {} (no decision)
+            CC->>PH: continue
+        else divergences found
+            H->>L: append {decision: deny, divergences}
+            H-->>CC: stdout: {decision: deny, reason: "<assembled>"}
+        end
+    end
+```
+
+---
+
+## 8. Top-level design
+
+### 8.1 System context
+
+```mermaid
+flowchart LR
+    subgraph "Claude Code"
+        CC[Bash tool call]
+    end
+
+    subgraph "This project"
+        H[Hook binary<br/>~/.claude/scripts/bash-pretool-hook]
+        L[(Decision log<br/>~/.claude-bash-hook/<br/>decisions.jsonl)]
+        C[(Config<br/>config.toml)]
+    end
+
+    subgraph "Claude Code (continued)"
+        PH[Permission harness<br/>tree-sitter + validators]
+        SB[Sandbox]
+    end
+
+    CC -->|JSON over stdin| H
+    H -->|JSON over stdout| CC
+    H --> L
+    C --> H
+    CC -->|if hook didn't deny| PH
+    PH -->|if approved| SB
+```
+
+The hook is a stdin/stdout filter. Claude Code spawns it once per Bash invocation, with a default 3s timeout. We aim for p99 < 100ms.
+
+### 8.2 Internal pipeline
+
+```mermaid
+flowchart TD
+    I[1. Ingress<br/>decode tool input JSON] --> P[2. Parse<br/>command → AST]
+    P --> A[3. Analyze<br/>AST → Divergences]
+    A --> D[4. Decide<br/>Divergences → Decision]
+    D --> L[5. Log<br/>append JSONL]
+    L --> E[6. Egress<br/>encode decision JSON]
+
+    P -.->|parse error| FE[Fail-closed deny<br/>configurable to fail-open]
+    FE --> L
+
+    A -.->|detector panic| RC[Recover, log,<br/>passthrough]
+    RC --> L
+```
+
+Six stages, one responsibility each. The interesting design choices live at the seams.
+
+### 8.3 Component breakdown
+
+```mermaid
+flowchart TB
+    subgraph cmd["cmd/hook"]
+        MAIN[main.go<br/>stdin/stdout, config load]
+    end
+
+    subgraph internal["internal/"]
+        ING[ingress<br/>JSON decode]
+        PAR[parser<br/>thin wrapper on mvdan.cc/sh]
+        ANA[analyzer<br/>walks AST, dispatches detectors]
+        DEC[decider<br/>Divergences → Decision + reason]
+        LOG[logger<br/>JSONL append]
+        EGR[egress<br/>JSON encode]
+    end
+
+    subgraph det["internal/detectors/"]
+        REG[registry.go<br/>map of ID → Detector]
+        D1[backslash_ops.go]
+        D2[quote_comment.go]
+        D3[ansi_c_quoting.go]
+        D4[subcommand_cap.go]
+        DN[... grows over time ...]
+    end
+
+    MAIN --> ING --> PAR --> ANA --> DEC --> LOG --> EGR
+    ANA --> REG
+    REG --> D1
+    REG --> D2
+    REG --> D3
+    REG --> D4
+    REG --> DN
+```
+
+The `detectors/` directory is **the project's growth axis**. New known-bad constructs are new files plus one registry entry. Everything else stays still.
+
+### 8.4 Key types
+
+```mermaid
+classDiagram
+    class Divergence {
+        +string ID
+        +syntax.Node Node
+        +Severity Severity
+        +string Explanation
+        +string Rewrite
+        +string HarnessRef
+    }
+
+    class Severity {
+        <<enumeration>>
+        Warn
+        Deny
+    }
+
+    class Decision {
+        +Behavior Behavior
+        +string Reason
+    }
+
+    class Behavior {
+        <<enumeration>>
+        Allow
+        Deny
+        Passthrough
+    }
+
+    class Detector {
+        <<interface>>
+        +ID() string
+        +Detect(node, ctx) []Divergence
+    }
+
+    Divergence --> Severity
+    Decision --> Behavior
+    Detector ..> Divergence : produces
+```
+
+A `Divergence` is the atom of the system: "Claude's parser will mishandle this AST node, here's why, here's the rewrite." A `Decision` is what the hook returns. `Passthrough` means we have nothing to say — the harness handles it. We rarely emit `Allow` (allow short-circuits the harness's deny rules; not our job).
+
+### 8.5 The `reason` template
+
+The reason string is the *actual product*. Format:
+
+```
+Detected {ID}: {Explanation}
+
+Suggested rewrite: {Rewrite}
+
+Reference: {HarnessRef}
+```
+
+Example for `BACKSLASH_SEMICOLON`:
+
+```
+Detected BACKSLASH_SEMICOLON: This command uses a backslash-escaped semicolon (`\;`),
+which Claude Code's permission parser normalizes inconsistently with bash. The harness
+sees two commands; bash sees one.
+
+Suggested rewrite: Use `find -exec ... +` instead of `find -exec ... \;`, or split into
+two separate Bash tool calls.
+
+Reference: bashSecurity.ts:validateBackslashEscapedOperators
+```
+
+### 8.6 Cross-cutting concerns
+
+**Logging.** Append-only JSONL at `~/.claude-bash-hook/decisions.jsonl`. Fields: `timestamp`, `raw_command`, `ast_dump` (S-expr or JSON), `divergences`, `decision`. This is the corpus. Rotation later.
+
+**Config.** Single TOML file at `~/.claude-bash-hook/config.toml`:
+- `log_path` — override default
+- `fail_closed_on_parse_error` — bool, default `true`
+- `disabled_detectors` — list of IDs (escape hatch when a detector is wrong)
+
+No allow/deny rules in this config. That's the harness's job.
+
+**Failure modes.**
+
+| Mode | Behavior |
+|---|---|
+| Parse error | Deny with reason, configurable to passthrough |
+| Detector panic | Recover, log, passthrough (a bug in our code can't break Claude Code) |
+| Hook timeout (3s default) | Outside our control; fall through to harness |
+| Config file missing | Use compiled defaults; log warning to stderr |
+
+**Performance budget.** p99 < 100ms. Subprocess calls (e.g., shfmt + jq) are ruled out for this reason — they add 100–150ms of fork/exec overhead per call (per oryband's measurements).
+
+**Distribution.** Single static Go binary. Installed to `~/.claude/scripts/bash-pretool-hook`. Wired up in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{
+        "type": "command",
+        "command": "~/.claude/scripts/bash-pretool-hook",
+        "timeout": 3
+      }]
+    }]
+  }
+}
+```
+
+### 8.7 What this design buys us
+
+1. **Explicit growth axis.** New divergences live in `detectors/`. A year from now with 40 entries, the architecture hasn't changed.
+2. **Contained harness coupling.** Only detectors know about specific harness behaviors. The parser, decider, hook plumbing, and logging don't know `bashSecurity.ts` exists. When the harness changes, we edit detector strings; nothing structural moves.
+3. **Corpus as first-class output.** Stage 5 is a peer of stages 1–4, not a logging detail. The corpus is what lets us discover new divergences empirically — the only honest way to maintain this catalog given that we can't see the current harness source.
+
+---
+
+## 9. Starter divergence catalog
+
+These come from explicit comments in the leaked `bashSecurity.ts`. Each becomes a detector in v0.
+
+| ID | Construct | Source |
+|---|---|---|
+| `BACKSLASH_SEMICOLON` | `cmd1 \; cmd2` — splitter normalizes `\;` to `;`, bash sees one command | `validateBackslashEscapedOperators` |
+| `BACKSLASH_WHITESPACE` | `echo\ test/...` — splitter decodes to space separator, bash treats as one token | `validateBackslashEscapedWhitespace` |
+| `QUOTE_COMMENT_DESYNC` | `'x'#` — close-quote and `#` desync quote tracking | `validateCommentQuoteDesync` |
+| `ANSIC_QUOTING_OUTSIDE_OBFUSCATION` | `$'\x72\x6d'` outside the obfuscation check | `extractQuotedContent` limitation |
+| `FIFTY_SUBCOMMAND_CAP` | Compound command with > 50 segments | `MAX_SUBCOMMANDS_FOR_SECURITY_CHECK` |
+| `BARE_SEMICOLON_NODE` | The `node ';' not recognized` warning class — bare `;` separator in contexts the visitor doesn't enumerate | tree-sitter visitor gap |
+
+---
+
+## 10. Open questions before implementation
+
+1. **PreToolUse JSON contract.** Verify the exact request/response schema in current Claude Code docs. Field names, exit-code semantics, and the precedence of `decision` vs. exit code may have shifted since the writeups we're working from.
+2. **`mvdan.cc/sh` walker shape.** Confirm `syntax.Walk` callback semantics, position reporting, and partial-parse error handling. Heredocs and arithmetic expansions are likely to need custom handling.
+3. **Starter set validation.** Some bashSecurity.ts comments document validators that *exist to catch* the construct (so the harness handles it correctly) versus comments documenting that the harness is *still* fragile in that area. We need to distinguish before declaring a detector necessary.
+4. **Log rotation.** Defer for v0; design when corpus size matters.
+5. **Test corpus.** Bootstrap from Pečan's `rable`/Parable test suite plus our own observed ExampleProject sessions.
+
+---
+
+## 11. Non-goals (explicitly)
+
+- **Not** a replacement for Claude Code's permission harness.
+- **Not** a second allow/deny policy engine.
+- **Not** a fork of `bashSecurity.ts`. We don't duplicate validators — we cover the gap between what the harness *should* enforce and what it *does* enforce.
+- **Not** a security boundary in the strict sense. The sandbox is the security boundary. This hook is a teaching layer that improves the model's signal quality.
+
+---
+
+## 12. Next steps
+
+1. Verify items 1–3 in §10 against current Claude Code docs and `mvdan.cc/sh` API.
+2. Detailed design of the detector registry interface (in/out types, context object, position reporting).
+3. v0 implementation: ingress, parser wrapper, three detectors (`BACKSLASH_SEMICOLON`, `FIFTY_SUBCOMMAND_CAP`, `BARE_SEMICOLON_NODE`), decider, JSONL logger, egress.
+4. Integration test against a hand-written corpus.
+5. Wire into one ExampleProject dev session; observe; iterate on `reason` template wording.

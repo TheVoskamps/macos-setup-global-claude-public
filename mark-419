@@ -1,0 +1,193 @@
+# `.github/public-mirror/`
+
+Plumbing for the read-only public mirror at
+[`TheVoskamps/macos-setup-global-claude-public`](https://github.com/TheVoskamps/macos-setup-global-claude-public).
+
+## Contents
+
+- `paths.allowlist` — paths shipped to the mirror by `git-filter-repo`.
+  Anything not on this list is excluded.
+- `mailmap` — rewrites private commit-author emails to a
+  `<localpart>@macos-setup-global-claude.local` form for the mirror.
+- `CONTRIBUTORS.template` — header text prepended to the auto-generated
+  `CONTRIBUTORS` file. The workflow rebuilds the file content on every
+  run and only commits when the resulting blob differs from the one at
+  the current `HEAD:CONTRIBUTORS` (so a run with no new contributors
+  produces no new commit).
+- `../workflows/public-mirror.yml` — the GitHub Actions workflow that
+  filters the repo, regenerates `CONTRIBUTORS` (skipped when the blob
+  is unchanged), and force-pushes to the mirror (skipped when the new
+  local tip already equals the mirror's current tip). A workflow run
+  against an unchanged source tree is a no-op; a run after a real
+  source change still rewrites SHAs through `git filter-repo` and
+  force-pushes the new history (see issue #122 for the planned
+  incremental-filter follow-up that would make those genuine changes
+  fast-forward).
+
+## Mirror posture (manually applied — POC for issue #66)
+
+The mirror is configured as **read-only for code, open for issues**.
+External users can file issues against the public repo; we triage and
+fix them in the upstream private repo. PRs cannot land.
+
+This posture was reached by hand on 2026-05-17. The configuration is
+not declared as IaC in this repo — the
+[`repo-public-mirror-setup`](../../skills/repo-public-mirror-setup.md)
+skill (tracked by [#66](https://github.com/TheVoskamps/macos-setup-global-claude/issues/66))
+is the canonical declaration. Re-running that skill against the mirror
+should be **idempotent**: it should reconcile the live state to what
+the skill specifies, with no manual cleanup required.
+
+### Target configuration
+
+On the mirror repo (`TheVoskamps/macos-setup-global-claude-public`):
+
+- Repo settings:
+  - `has_issues=true`
+  - `has_projects=false`, `has_wiki=false`, `has_discussions=false`
+  - `allow_merge_commit=true` (forced — see "Gotchas" below)
+  - `allow_squash_merge=false`, `allow_rebase_merge=false`
+  - `delete_branch_on_merge=true`
+- Branch protection on `main`: **none** (replaced by ruleset; see below).
+- Ruleset on `refs/heads/main`:
+  - Name: `mirror-main-readonly`
+  - Enforcement: `active`
+  - Rules: `update`, `deletion`, `non_fast_forward` (blocks normal
+    pushes, branch deletion, and force-pushes for non-bypass actors)
+  - Bypass actors: repo admin (`actor_id: 5`, `actor_type:
+    RepositoryRole`, `bypass_mode: always`)
+- Deploy key:
+  - Title: `public-mirror-workflow`
+  - `read_only: false` (must be writable so the workflow can force-push)
+  - Private half stored as the `PUBLIC_MIRROR_DEPLOY_KEY` secret on the
+    *upstream* (private) repo
+
+### How it was applied
+
+```bash
+# Enable Issues
+gh api -X PATCH repos/TheVoskamps/macos-setup-global-claude-public \
+  -f has_issues=true
+
+# Create the ruleset (payload in JSON below)
+gh api -X POST repos/TheVoskamps/macos-setup-global-claude-public/rulesets \
+  --input ruleset.json
+
+# Delete the old branch protection (rulesets supersede it)
+gh api -X DELETE \
+  repos/TheVoskamps/macos-setup-global-claude-public/branches/main/protection
+```
+
+Ruleset JSON:
+
+```json
+{
+  "name": "mirror-main-readonly",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "update" }
+  ]
+}
+```
+
+### Verification
+
+After applying:
+
+```bash
+gh api repos/TheVoskamps/macos-setup-global-claude-public --jq \
+  '{has_issues, has_projects, has_wiki, allow_merge_commit,
+    allow_squash_merge, allow_rebase_merge}'
+# expect: {has_issues: true, allow_merge_commit: true, others: false}
+
+gh api repos/TheVoskamps/macos-setup-global-claude-public/branches/main/protection
+# expect: 404 "Branch not protected"
+
+gh api repos/TheVoskamps/macos-setup-global-claude-public/rulesets \
+  --jq '.[] | {name, enforcement}'
+# expect: {name: "mirror-main-readonly", enforcement: "active"}
+```
+
+Then manually trigger the mirror workflow to confirm the deploy-key
+push still passes through the ruleset:
+
+```bash
+gh workflow run public-mirror.yml --ref main
+```
+
+### Gotchas (for the skill to handle)
+
+1. **GitHub refuses to disable all three merge methods.** A
+   `PATCH` with `allow_merge_commit=false, allow_squash_merge=false,
+   allow_rebase_merge=false` returns:
+
+   > "Sorry, you need to allow at least one merge strategy."
+   > `(no_merge_method)`
+
+   So we leave `allow_merge_commit=true`. The PR Merge button is *not*
+   greyed out — but the ruleset on `main` blocks any PR merge from
+   landing anyway, so this is harmless. The skill should pick one
+   merge method (merge-commit is the least disruptive) and leave the
+   others off.
+
+2. **Deploy keys with write access bypass branch rulesets natively.**
+   Our `bypass_actors` configuration uses `RepositoryRole id 5`
+   (admin). The workflow's force-push succeeded under the new ruleset
+   even though the deploy key is not associated with any repository
+   role — rulesets don't enforce against deploy keys the same way they
+   do against users. This means the admin-role bypass is
+   **belt-and-suspenders**, not load-bearing: the workflow would still
+   work without it. We keep it so that if the workflow auth ever
+   migrates to a PAT or app installation owned by an admin user, the
+   bypass is already in place.
+
+3. **PRs cannot be disabled at the repo level.** GitHub has no
+   `has_pull_requests` toggle. External users can still open PRs
+   against the mirror; the merge will fail because the push to `main`
+   is blocked by the ruleset. The README banner tells them to file
+   issues instead and explains that fixes happen upstream.
+
+4. **Rulesets supersede branch protection.** We delete the
+   pre-existing branch protection after creating the ruleset. Leaving
+   both in place is allowed by GitHub but causes confusing
+   double-evaluation. The skill should delete branch protection if
+   present whenever the ruleset is reconciled.
+
+5. **The allowlist must not ship `.github/`.** The mirror workflow's
+   force-push uses a deploy key, which lacks the `workflow` OAuth
+   scope. Pushing a commit that touches `.github/workflows/` would
+   fail with:
+
+   > "refusing to allow an OAuth App to create or update workflow ...
+   > without `workflow` scope"
+
+   So `.github/` is excluded from the allowlist by design, which means
+   this directory (`.github/public-mirror/`) — including this README —
+   never ships to the mirror. That's correct: it's upstream-only
+   plumbing.
+
+### What the skill needs to do (issue #66)
+
+When run against a fresh repo: create everything above from scratch.
+When re-run against an existing mirror: reconcile each piece
+idempotently — skip if matched, update if drifted, delete if extra
+(e.g. a recreated branch protection). The skill's first phase
+(deploy-key creation, workflow file installation, allowlist+mailmap
+templates) is already idempotent in the existing implementation; the
+posture configuration above is the gap this issue closes.

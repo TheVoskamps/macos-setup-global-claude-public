@@ -1,0 +1,31 @@
+# Allowlist for the public mirror.
+#
+# Lines starting with `#` and blank lines are ignored. Every other
+# line is a path or path prefix passed to `git-filter-repo
+# --paths-from-file`. Anything not matched is excluded from the
+# mirror (fail-safe for new sensitive files).
+#
+# The starting set below contains the files this skill requires to
+# be present in the mirror. Add repo-specific paths below the
+# marker. Audit additions carefully — paths NOT on this list are
+# excluded, but paths that ARE on this list ship verbatim.
+
+# --- required (do not remove) ---
+README.md
+LICENSE
+PATENTS
+PRIOR_ART.md
+CODEOWNERS
+.gitignore
+.github/public-mirror/
+.github/workflows/public-mirror.yml
+pull_request_template.md
+
+# --- repo-specific (add below) ---
+CLAUDE.md
+agents/
+skills/
+rules/
+hooks/
+keybindings.json
+settings.json

@@ -1,0 +1,12 @@
+# Contributors
+
+This file is part of a **read-only public mirror**. All commits
+originate upstream in the private source repository. Contributions
+are not accepted in this mirror — see the upstream repo for the
+contribution process.
+
+The list below is regenerated on every workflow run from filtered
+`git shortlog -sne` against the rewritten history, so emails are
+in the `<localpart>@macos-setup-global-claude.local` form.
+
+---

@@ -1,0 +1,6 @@
+{
+  // repo-config.md leads with YAML front-matter (parsed by /issue-* and the
+  // subagents), not an H1, so MD041 (first-line-h1) does not apply. MD041
+  // stays enabled repo-wide for prose docs via the root .markdownlint.jsonc.
+  "MD041": false
+}

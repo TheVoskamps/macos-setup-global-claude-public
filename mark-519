@@ -1,0 +1,290 @@
+# `.github/public-mirror/`
+
+Plumbing for the read-only public mirror at
+[`TheVoskamps/global-claude-config-public`](https://github.com/TheVoskamps/global-claude-config-public).
+
+## Contents
+
+- `paths.allowlist` — paths shipped to the mirror by `git-filter-repo`.
+  Anything not on this list is excluded.
+- `mailmap` — rewrites private commit-author emails to a
+  `<localpart>@global-claude-config.local` form for the mirror.
+- `replacements.txt` — `git-filter-repo` replacement rules used for
+  **both** `--replace-text` (blob content) and `--replace-message`
+  (commit messages). This is the value-scrubbing pass: it rewrites
+  specific values (personal paths, AWS account IDs, SSO profile names,
+  cluster/repo/org names, and the `ExampleProject`/`example-` prose
+  tokens) out of the content that *does* ship, as defense in depth on
+  top of the path allowlist. Ordering matters — filter-repo applies
+  rules in file order, so compound identifiers (full
+  `<RoleName>-<AccountID>` SSO profiles, full cluster names) are listed
+  before any prefix or substring that would also match them, and the
+  blanket prose sweeps come last. See the comment header in the file.
+  **The workflow does not feed this file to filter-repo directly.**
+  filter-repo's `--replace-text` / `--replace-message` parsers do not
+  skip `#`-prefixed lines (unlike `--paths-from-file`), so a bare `#`
+  comment line would parse as the literal rule `# -> ***REMOVED***` and
+  corrupt every `#` in every mirrored blob and commit message
+  (shebangs, comments, markdown headings — issue #157). The workflow
+  therefore keeps only real rule lines via an allow-list grep
+  (`grep -E '^(literal:|regex:|glob:)'`) into an ephemeral
+  `replacements.clean.txt` and points both flags at that cleaned copy.
+  Because every rule carries an explicit `literal:`/`regex:`/`glob:`
+  prefix, the allow-list both drops comments and blank lines and lets a
+  rule's match-text safely begin with `#` (a deny-list `grep -v '^#'`
+  would wrongly strip such a rule). The cleaned file is a runtime CI
+  artifact: it is written under this directory (which is excluded from
+  the allowlist), is `.gitignore`d so it can never be accidentally
+  committed, and never reaches the mirror. The workflow's input
+  fingerprint hashes this cleaned rule set, so a comment-only edit to
+  `replacements.txt` does not trigger a refilter and force-push.
+- `CONTRIBUTORS.template` — header text prepended to the auto-generated
+  `CONTRIBUTORS` file. The workflow rebuilds the file content on every
+  run and only commits when the resulting blob differs from the one at
+  the current `HEAD:CONTRIBUTORS` (so a run with no new contributors
+  produces no new commit).
+- `../workflows/public-mirror.yml` — the GitHub Actions workflow that
+  filters the repo, regenerates `CONTRIBUTORS` (skipped when the blob
+  is unchanged), and pushes to the mirror's `main` (skipped when the
+  new local tip already equals the mirror's current tip), plus two
+  bookkeeping branches on the mirror that persist filter-repo state
+  across runs.
+
+### Workflow behavior
+
+- Stable public SHAs across runs. The filter step runs
+  `git filter-repo --state-branch filter-repo-state
+  --prune-empty=never`, so unchanged source commits keep their
+  previously-computed public SHAs across runs. A genuine source
+  change appends commits as a fast-forward; a consumer's `git pull`
+  fast-forwards cleanly instead of seeing the entire history
+  rewritten.
+- Two bookkeeping branches live on the mirror (not in this repo):
+  - `filter-repo-state` — owned by `git filter-repo`; holds the
+    persisted fast-import marks (source-commit → public-commit SHA
+    mapping).
+  - `filter-repo-meta` — owned by the workflow; holds a single
+    `inputs.sha256` blob with a sha256 fingerprint of
+    `paths.allowlist` + `mailmap` + `replacements.txt`. Used to detect
+    config changes that invalidate the persisted marks.
+  Both are always pushed (with `--force`) at the end of each run so
+  the next run can read them back. The state branch is rewritten by
+  filter-repo on a refilter; the meta branch is rebuilt fresh each
+  run with pinned author/committer dates, so a no-op meta push is a
+  true no-op when the fingerprint is unchanged.
+- Editing `paths.allowlist`, `mailmap`, or `replacements.txt` triggers
+  a detected full refilter on the next run. The workflow logs three
+  `::warning::` annotations together: the reason
+  (one of "first run (no state branch on mirror)", "meta branch
+  missing or unreadable on mirror", or "filter inputs changed
+  (paths.allowlist, mailmap, or replacements.txt edited)"), the
+  consequence
+  ("force-push the mirror's main and rewrite all public SHAs"), and
+  the consumer action ("one-time
+  `git fetch && git reset --hard origin/main`"). Steady-state runs
+  (no source change, no config change) print
+  `Filter inputs unchanged; reusing persisted marks from state branch.`
+  and produce a no-op push to `main`.
+- `--prune-empty=never` is a deliberate trade-off paired with
+  `--state-branch` (filter-repo's source warns that empty-commit
+  pruning does not work well with `--state-branch`). Source commits
+  that touch only excluded paths (`.claude/`, `designs/`, `memory/`,
+  etc.) show up in the public history as empty commits with the
+  original commit message intact. Leaking both activity timing AND
+  the commit-message contents for changes touching only excluded
+  paths is the accepted cost for SHA stability; the excluded diff
+  payload itself stays excluded.
+- The first run after this change lands is a one-time SHA-scheme
+  switch: filter-repo has no persisted marks yet, so it rebuilds
+  history from scratch and force-pushes a rewritten `main`.
+  Consumers reset once; subsequent runs are fast-forward.
+- The bare clone is made with `git clone --no-local --bare
+  "file://$PWD/.git"` so it is single-packed before filter-repo runs.
+  filter-repo's from-scratch path enforces a freshness check
+  ("expected freshly packed repo") that requires a single pack
+  (packs <= 1) with no non-replace-ref loose objects. A plain
+  `git clone --bare .` from the Actions checkout takes git's
+  local-clone hardlink path, which mirrors the source's pack layout;
+  the Actions checkout is multi-packed, so the clone ends up with two
+  packs and trips the check's `packs > 1` clause, aborting the run
+  before any history is rewritten (issue #160). `--no-local` via a
+  `file://` URL forces the real transfer protocol, which sends a
+  single packfile (count 0, packs 1); the `file://` form is required
+  because a plain path can still trigger the local-clone optimization
+  even with `--no-local` on some git versions. This supersedes the
+  earlier `git gc` remediation (issues #160/#162): `git gc` cleared
+  loose objects but left the two packs (two is below git's gc
+  pack-consolidation threshold), so the freshness check still aborted.
+  The workflow does NOT pass `git filter-repo --force` — the
+  maintainer argues against bypassing the check, and making the clone
+  genuinely fresh is the correct fix. The clone keeps a single remote
+  named `origin`, so it leaves the one-remote-named-`origin`
+  constraint (above) intact.
+
+## Mirror posture (manually applied — POC for issue #66)
+
+The mirror is configured as **read-only for code, open for issues**.
+External users can file issues against the public repo; we triage and
+fix them in the upstream private repo. PRs cannot land.
+
+This posture was reached by hand on 2026-05-17. The configuration is
+not declared as IaC in this repo — the
+[`repo-public-mirror-setup`](../../skills/repo-public-mirror-setup.md)
+skill (tracked by [#66](https://github.com/TheVoskamps/global-claude-config/issues/66))
+is the canonical declaration. Re-running that skill against the mirror
+should be **idempotent**: it should reconcile the live state to what
+the skill specifies, with no manual cleanup required.
+
+### Target configuration
+
+On the mirror repo (`TheVoskamps/global-claude-config-public`):
+
+- Repo settings:
+  - `has_issues=true`
+  - `has_projects=false`, `has_wiki=false`, `has_discussions=false`
+  - `allow_merge_commit=true` (forced — see "Gotchas" below)
+  - `allow_squash_merge=false`, `allow_rebase_merge=false`
+  - `delete_branch_on_merge=true`
+- Branch protection on `main`: **none** (replaced by ruleset; see below).
+- Ruleset on `refs/heads/main`:
+  - Name: `mirror-main-readonly`
+  - Enforcement: `active`
+  - Rules: `update`, `deletion`, `non_fast_forward` (blocks normal
+    pushes, branch deletion, and force-pushes for non-bypass actors)
+  - Bypass actors: repo admin (`actor_id: 5`, `actor_type:
+    RepositoryRole`, `bypass_mode: always`)
+- Deploy key:
+  - Title: `public-mirror-workflow`
+  - `read_only: false` (must be writable so the workflow can force-push)
+  - Private half stored as the `PUBLIC_MIRROR_DEPLOY_KEY` secret on the
+    *upstream* (private) repo
+
+### How it was applied
+
+```bash
+# Enable Issues
+gh api -X PATCH repos/TheVoskamps/global-claude-config-public \
+  -f has_issues=true
+
+# Create the ruleset (payload in JSON below)
+gh api -X POST repos/TheVoskamps/global-claude-config-public/rulesets \
+  --input ruleset.json
+
+# Delete the old branch protection (rulesets supersede it)
+gh api -X DELETE \
+  repos/TheVoskamps/global-claude-config-public/branches/main/protection
+```
+
+Ruleset JSON:
+
+```json
+{
+  "name": "mirror-main-readonly",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "update" }
+  ]
+}
+```
+
+### Verification
+
+After applying:
+
+```bash
+gh api repos/TheVoskamps/global-claude-config-public --jq \
+  '{has_issues, has_projects, has_wiki, allow_merge_commit,
+    allow_squash_merge, allow_rebase_merge}'
+# expect: {has_issues: true, allow_merge_commit: true, others: false}
+
+gh api repos/TheVoskamps/global-claude-config-public/branches/main/protection
+# expect: 404 "Branch not protected"
+
+gh api repos/TheVoskamps/global-claude-config-public/rulesets \
+  --jq '.[] | {name, enforcement}'
+# expect: {name: "mirror-main-readonly", enforcement: "active"}
+```
+
+Then manually trigger the mirror workflow to confirm the deploy-key
+push still passes through the ruleset:
+
+```bash
+gh workflow run public-mirror.yml --ref main
+```
+
+### Gotchas (for the skill to handle)
+
+1. **GitHub refuses to disable all three merge methods.** A
+   `PATCH` with `allow_merge_commit=false, allow_squash_merge=false,
+   allow_rebase_merge=false` returns:
+
+   > "Sorry, you need to allow at least one merge strategy."
+   > `(no_merge_method)`
+
+   So we leave `allow_merge_commit=true`. The PR Merge button is *not*
+   greyed out — but the ruleset on `main` blocks any PR merge from
+   landing anyway, so this is harmless. The skill should pick one
+   merge method (merge-commit is the least disruptive) and leave the
+   others off.
+
+2. **Deploy keys with write access bypass branch rulesets natively.**
+   Our `bypass_actors` configuration uses `RepositoryRole id 5`
+   (admin). The workflow's force-push succeeded under the new ruleset
+   even though the deploy key is not associated with any repository
+   role — rulesets don't enforce against deploy keys the same way they
+   do against users. This means the admin-role bypass is
+   **belt-and-suspenders**, not load-bearing: the workflow would still
+   work without it. We keep it so that if the workflow auth ever
+   migrates to a PAT or app installation owned by an admin user, the
+   bypass is already in place.
+
+3. **PRs cannot be disabled at the repo level.** GitHub has no
+   `has_pull_requests` toggle. External users can still open PRs
+   against the mirror; the merge will fail because the push to `main`
+   is blocked by the ruleset. The README banner tells them to file
+   issues instead and explains that fixes happen upstream.
+
+4. **Rulesets supersede branch protection.** We delete the
+   pre-existing branch protection after creating the ruleset. Leaving
+   both in place is allowed by GitHub but causes confusing
+   double-evaluation. The skill should delete branch protection if
+   present whenever the ruleset is reconciled.
+
+5. **The allowlist must not ship `.github/`.** The mirror workflow's
+   force-push uses a deploy key, which lacks the `workflow` OAuth
+   scope. Pushing a commit that touches `.github/workflows/` would
+   fail with:
+
+   > "refusing to allow an OAuth App to create or update workflow ...
+   > without `workflow` scope"
+
+   So `.github/` is excluded from the allowlist by design, which means
+   this directory (`.github/public-mirror/`) — including this README —
+   never ships to the mirror. That's correct: it's upstream-only
+   plumbing.
+
+### What the skill needs to do (issue #66)
+
+When run against a fresh repo: create everything above from scratch.
+When re-run against an existing mirror: reconcile each piece
+idempotently — skip if matched, update if drifted, delete if extra
+(e.g. a recreated branch protection). The skill's first phase
+(deploy-key creation, workflow file installation, allowlist+mailmap
+templates) is already idempotent in the existing implementation; the
+posture configuration above is the gap this issue closes.

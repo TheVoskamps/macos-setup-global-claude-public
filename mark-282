@@ -1,0 +1,54 @@
+---
+source-control: GitHub
+issues: GitHub
+issue-link-prefix: "#"
+default-issue-source-branch: main
+default-pr-target-branch: main
+issue-branch-naming-prefix: none
+---
+
+# Repo Config
+
+Read by `/issue:address` and by the `issue-developer`, `issue-fixer`,
+`doc-updater`, and `pr-reviewer` subagents at the start of every run.
+Do not assume values are already in context — re-read this file every
+time.
+
+## Fields
+
+- **source-control**: `GitHub` or `CodeCommit`. Selects between `gh`
+  and `aws codecommit` for VCS operations.
+- **issues**: `GitHub` or `Jira`. Selects between `gh issue` and the
+  Jira CLI/API for issue operations.
+- **issue-link-prefix**: prefix used when referencing an issue in
+  commit messages and PR bodies. The orchestrator and agents
+  substitute it as a literal string concat: `<issue-link-prefix><N>`.
+  For GitHub repos, set this to `#` so references render as `#123`.
+  For Jira, use the project key plus dash, e.g. `SET-` (references
+  like `SET-123`).
+- **default-issue-source-branch**: branch that new issue work
+  branches FROM. The orchestrator must pin this when creating the
+  feature branch (e.g.
+  `git switch -c <name> origin/<source-branch>`) so the branch is
+  rooted at the right commit, not at whatever HEAD the worktree
+  happened to start on.
+- **default-pr-target-branch**: branch that issue PRs target. Often
+  the same as `default-issue-source-branch`, but not always.
+- **issue-branch-naming-prefix**: branch naming style.
+  - `none`     -> `issue-917-slug`
+  - `initials` -> `ev/issue-917-slug`
+  - `name`     -> `edwin/issue-917-slug`
+
+## Why this file exists
+
+Different repos use different VCS, issue trackers, and branching
+strategies. The `/issue:address` orchestrator and its subagents
+(`issue-developer`, `issue-fixer`, `doc-updater`, `pr-reviewer`)
+must not hardcode assumptions like "PR base is `main`", "use `gh`",
+or "issue link is `#NNN`". When a repo deviates, the orchestrator
+silently does the wrong thing. This file is the single source of
+truth that everything reads at the start of every run.
+
+If this file is missing, `/issue:address` aborts with an error
+pointing at this skill (`/repo:config`) to create one
+interactively.

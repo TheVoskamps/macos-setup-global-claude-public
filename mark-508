@@ -1,0 +1,46 @@
+# This Repo Is the Source of Truth for ~/.claude
+
+This repository (`global-claude-config`) is the **source** for the
+global Claude Code configuration. The directories here:
+
+- `/rules/`   → deployed to `~/.claude/rules/`
+- `/skills/`  → deployed to `~/.claude/skills/`
+- `/agents/`  → deployed to `~/.claude/agents/`
+- `CLAUDE.md` → deployed to `~/.claude/CLAUDE.md`
+- `/hooks/`   → deployed to `~/.claude/hooks/`
+
+A **separate deploy step** (not part of normal editing) syncs this
+repo's content into `~/.claude/`. The files under `~/.claude/` are
+**build output**, not the originals.
+
+## What this means for editing
+
+When a task says "update skill X", "fix rule Y", "change agent Z",
+or "edit a hook", the file to edit is **in this repo** under
+`/skills/`, `/rules/`, `/agents/`, `/hooks/`, or `CLAUDE.md` — NOT
+the deployed copy in `~/.claude/`.
+
+Editing these files **in this repo** is ordinary in-repo work. It
+follows the normal code-change approval flow (propose → approve →
+edit → commit). It is **NOT** the "propose before editing global
+~/.claude" case from `core-principles.md` §1.5.
+
+The `core-principles.md` §1.5 rule ("PROPOSE BEFORE EDITING GLOBAL
+~/.claude") applies to editing the **deployed copies** under
+`~/.claude/` directly — e.g. when working in some *other* repo and
+reaching over into `~/.claude/`. It explicitly does NOT apply to
+editing the source files in this repo, which is this repo's entire
+purpose.
+
+## The trap to avoid
+
+Do not refuse, or demand extra approval for, an edit to
+`/skills/<name>/SKILL.md` (or `/rules/*`, `/agents/*`, `CLAUDE.md`,
+`/hooks/*`) **in this repo** on the grounds that it "touches global
+~/.claude config." It does not. The deployed copy is downstream of
+this edit, produced by a separate deploy step. Treat these as the
+normal repo files they are.
+
+`/issue-address` and its subagents work in worktrees of THIS repo,
+so they CAN and SHOULD edit these source files when an issue calls
+for it.

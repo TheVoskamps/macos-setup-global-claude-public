@@ -1,0 +1,15 @@
+---
+name: feedback_never_suggest_https
+description: Never suggest downgrading from SSH to HTTPS for git operations
+type: feedback
+---
+
+Never suggest using HTTPS as an alternative to SSH for git
+operations. Do not suggest security downgrades of any kind.
+
+**Why:** Edwin considers HTTPS a lesser security option. Suggesting
+it as a workaround for SSH issues is unacceptable.
+
+**How to apply:** When SSH to GitHub times out, suggest retrying
+or investigating the network issue. Never offer HTTPS as a
+fallback.

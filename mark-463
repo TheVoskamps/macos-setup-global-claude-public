@@ -1,0 +1,54 @@
+# filter-repo replacement rules for the public mirror.
+#
+# Used for BOTH --replace-text (blob content) and --replace-message
+# (commit messages) in .github/workflows/public-mirror.yml. The same
+# file drives both passes.
+#
+# ORDERING MATTERS: filter-repo applies replacements in file order.
+# Compound strings (full cluster names, full <RoleName>-<AccountID>
+# SSO profiles) MUST be listed before any prefix or substring that
+# would also match them. The blanket prose sweeps for the bare
+# "ExampleProject" / "example-" tokens come LAST so the specific
+# compound identifiers above are matched first and only residual
+# prose occurrences reach those rules.
+
+# Personal paths
+literal:/path/to/repo/==>/path/to/repo/
+literal:/Users/<user>/==>/Users/<user>/
+
+# Cross-account IAM role
+literal:ExampleCrossAccountRole==>ExampleCrossAccountRole
+
+# IAM Identity Center SSO profiles (full <RoleName>-<AccountID> form)
+literal:ExampleManagementAdmin-ACCOUNT==>ExampleManagementAdmin-ACCOUNT
+literal:ExampleInfrastructureAdmin-ACCOUNT==>ExampleInfrastructureAdmin-ACCOUNT
+literal:ExampleDevOpsAdmin-ACCOUNT==>ExampleDevOpsAdmin-ACCOUNT
+literal:ExampleSandboxAdmin-ACCOUNT==>ExampleSandboxAdmin-ACCOUNT
+literal:ExampleIntegAdmin-ACCOUNT==>ExampleIntegAdmin-ACCOUNT
+literal:ExampleQaAdmin-ACCOUNT==>ExampleQaAdmin-ACCOUNT
+literal:ExampleProdAdmin-ACCOUNT==>ExampleProdAdmin-ACCOUNT
+
+# Bare AWS account IDs (catches any occurrences outside the
+# SSO-profile form, e.g. ARNs, bare references)
+literal:REDACTED==>REDACTED
+literal:REDACTED==>REDACTED
+literal:REDACTED==>REDACTED
+literal:REDACTED==>REDACTED
+literal:REDACTED==>REDACTED
+literal:REDACTED==>REDACTED
+literal:REDACTED==>REDACTED
+
+# EKS cluster
+literal:example-cluster==>example-cluster
+
+# Repo and org names
+literal:example-app-repo==>example-app-repo
+literal:example-infra-repo==>example-infra-repo
+literal:example-claude-app==>example-claude-app
+literal:example-other-repo==>example-other-repo
+literal:github.com/example-org/==>github.com/example-org/
+literal:example-org/repo==>example-org/repo
+
+# ExampleProject token in prose (must come AFTER all compound forms above)
+literal:ExampleProject==>ExampleProject
+literal:example-==>example-

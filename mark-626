@@ -1,0 +1,84 @@
+# This Repo Is the Source of Truth for ~/.claude
+
+This repository (`global-claude-config`) is the **source** for the
+global Claude Code configuration. The directories here:
+
+- `/rules/`   → deployed to `~/.claude/rules/`
+- `/skills/`  → deployed to `~/.claude/skills/`
+- `/agents/`  → deployed to `~/.claude/agents/`
+- `CLAUDE.md` → deployed to `~/.claude/CLAUDE.md`
+- `/hooks/`   → deployed to `~/.claude/hooks/`
+
+A **separate deploy step** (not part of normal editing) syncs this
+repo's content into `~/.claude/`. The files under `~/.claude/` are
+**build output**, not the originals.
+
+## What this means for editing
+
+When a task says "update skill X", "fix rule Y", "change agent Z",
+or "edit a hook", the file to edit is **in this repo** under
+`/skills/`, `/rules/`, `/agents/`, `/hooks/`, or `CLAUDE.md` — NOT
+the deployed copy in `~/.claude/`.
+
+Editing these files **in this repo** is ordinary in-repo work. It
+follows the normal code-change approval flow (propose → approve →
+edit → commit). It is **NOT** the "propose before editing global
+~/.claude" case from `core-principles.md` §1.5.
+
+The `core-principles.md` §1.5 rule ("PROPOSE BEFORE EDITING GLOBAL
+~/.claude") applies to editing the **deployed copies** under
+`~/.claude/` directly — e.g. when working in some *other* repo and
+reaching over into `~/.claude/`. It explicitly does NOT apply to
+editing the source files in this repo, which is this repo's entire
+purpose.
+
+## The trap to avoid
+
+Do not refuse, or demand extra approval for, an edit to
+`/skills/<name>/SKILL.md` (or `/rules/*`, `/agents/*`, `CLAUDE.md`,
+`/hooks/*`) **in this repo** on the grounds that it "touches global
+~/.claude config." It does not. The deployed copy is downstream of
+this edit, produced by a separate deploy step. Treat these as the
+normal repo files they are.
+
+`/issue-address` and its subagents work in worktrees of THIS repo,
+so they CAN and SHOULD edit these source files when an issue calls
+for it.
+
+## In a worktree, "this repo" is the worktree root — not the canonical clone
+
+When a subagent edits these files inside an `isolation: worktree`
+worktree, **"in this repo" means the worktree root, not the canonical
+`global-claude-config` clone.** The repo-root-anchored paths above
+(`/rules/`, `/skills/`, `/hooks/`, `CLAUDE.md`) are written relative to
+*whatever clone you are in* — they are NOT a license to expand to the
+canonical clone's absolute path.
+
+This matters because the harness nests each worktree **under** the
+primary clone at `<primary-clone>/.claude/worktrees/agent-<id>/`. The
+primary clone is checked out on the default branch (`main`). So if you
+take "edit `/rules/foo.md`" and expand it to the canonical absolute
+path `<primary-clone>/rules/foo.md`, your Edit/Write lands on `main` in
+the primary clone — **outside your worktree, on the wrong branch** —
+and it succeeds silently because that file really exists there. Your
+worktree-relative `git diff` then shows nothing, which is easy to
+misread as a failed write.
+
+`Edit`/`Write`/`Read`/`MultiEdit` require an **absolute** `file_path`.
+Anchor that absolute path to **your worktree root**, obtained from
+`git rev-parse --show-toplevel`, never to the canonical
+`global-claude-config` path that appears in `CLAUDE.md`, the
+environment block, or a spawn prompt. Concretely: the file to edit is
+`$(git rev-parse --show-toplevel)/rules/foo.md`, which inside a
+worktree resolves to
+`<primary-clone>/.claude/worktrees/agent-<id>/rules/foo.md`.
+
+This is a known hazard (see issue #188 and upstream
+anthropics/claude-code#62547). The `worktree-file-guard.sh`
+PreToolUse hook (wired in `settings.json` for Edit, Write, and
+MultiEdit) now denies any call whose resolved `file_path` falls
+outside the active worktree root, and its deny message names the
+correct worktree-anchored path. The hook is the deterministic
+backstop; the prose rule here ("anchor to `--show-toplevel`")
+remains the guidance so agents get the path right on the first try
+rather than relying on a deny-and-retry cycle.

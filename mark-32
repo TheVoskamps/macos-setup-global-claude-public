@@ -1,0 +1,22 @@
+---
+name: feedback_discipline_under_pressure
+description: Critical feedback — maintain rigor and discipline especially when pressure is high and many issues are in flight
+type: feedback
+---
+
+The higher the pressure, the more operational need, the more
+issues being juggled — the MORE important it is to maintain
+discipline and a formal approach. Not less.
+
+**Why:** During a prod outage session, I repeatedly cut corners:
+made assumptions without checking (ECR lifecycle policy
+speculation), acted without approval (spawning agents, running
+commands), speculated about things I hadn't verified (sandbox
+not actively used), and prioritized speed over rigor. Every
+shortcut compounded into more mistakes.
+
+**How to apply:** Under pressure, slow down. Check before
+stating. Investigate before concluding. Ask before acting.
+The formal workflow (diagnose → propose → ask → wait → act)
+exists precisely for high-pressure situations, not despite them.
+Never trade rigor for speed.

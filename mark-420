@@ -1,0 +1,140 @@
+name: public-mirror
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: public-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-filter-repo
+        run: |
+          python3 -m pip install --user git-filter-repo
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Set up SSH deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.PUBLIC_MIRROR_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_mirror
+          chmod 600 ~/.ssh/id_mirror
+          # NOTE: ssh-keyscan is TOFU (Trust-On-First-Use) — the very
+          # first run trusts whatever key the GitHub IP returns. The
+          # GitHub-hosted runner is reaching GitHub from inside the
+          # same provider's network on every run, so the practical
+          # attack surface is narrow, but pinning is stronger. If
+          # this workflow is ever ported off GitHub-hosted runners,
+          # replace this line with pinned host keys fetched from
+          # https://api.github.com/meta (the `ssh_keys` field, with
+          # the connection itself trusted via TLS PKI).
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host github-mirror
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/id_mirror
+            IdentitiesOnly yes
+          EOF
+
+      - name: Filter into a fresh bare clone
+        env:
+          CONF: ${{ github.workspace }}/.github/public-mirror
+        run: |
+          set -euo pipefail
+          WORK=$(mktemp -d)
+          git clone --bare . "$WORK/src.git"
+          cd "$WORK/src.git"
+          git filter-repo \
+            --paths-from-file "$CONF/paths.allowlist" \
+            --mailmap "$CONF/mailmap"
+          echo "FILTERED=$WORK/src.git" >> "$GITHUB_ENV"
+
+      - name: Regenerate CONTRIBUTORS
+        env:
+          CONF: ${{ github.workspace }}/.github/public-mirror
+          BOT_EMAIL: public-mirror@macos-setup-global-claude.local
+        run: |
+          set -euo pipefail
+          cd "$FILTERED"
+          # Build the new file content in $RUNNER_TEMP (the bare clone
+          # has no working tree to write into), then insert it as a
+          # blob and synthesize a new tree that adds the CONTRIBUTORS
+          # entry on top of HEAD's existing tree.
+          {
+            cat "$CONF/CONTRIBUTORS.template"
+            echo
+            git shortlog -sne --all
+          } > "${RUNNER_TEMP}/CONTRIBUTORS"
+          BLOB=$(git hash-object -w "${RUNNER_TEMP}/CONTRIBUTORS")
+          # Short-circuit: if the freshly-generated CONTRIBUTORS blob
+          # is byte-identical to the one already at HEAD:CONTRIBUTORS,
+          # do not synthesize a new commit. Skipping the commit here
+          # keeps refs/heads/main pointing at the filter-repo output,
+          # so a no-source-change run produces a tip SHA identical to
+          # the previous run's tip and the force-push downstream
+          # becomes a no-op.
+          HEAD_BLOB=$(git rev-parse --verify --quiet HEAD:CONTRIBUTORS || true)
+          if [ -n "$HEAD_BLOB" ] && [ "$BLOB" = "$HEAD_BLOB" ]; then
+            echo "CONTRIBUTORS unchanged (blob $BLOB); skipping synthetic commit."
+            exit 0
+          fi
+          # Reuse HEAD's tree as the base, then overlay the new blob
+          # via a temporary index. read-tree loads HEAD's tree into
+          # the index; update-index --add registers the new blob;
+          # write-tree emits the resulting tree SHA.
+          export GIT_INDEX_FILE="${RUNNER_TEMP}/idx"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree HEAD
+          git update-index --add --cacheinfo "100644,$BLOB,CONTRIBUTORS"
+          NEW_TREE=$(git write-tree)
+          unset GIT_INDEX_FILE
+          # Pin author/committer dates to HEAD's committer date so the
+          # synthetic commit's SHA is deterministic across runs. Using
+          # wall-clock here would change the tip SHA on every run even
+          # when nothing else changed, which is the root cause of the
+          # spurious force-pushes consumers see.
+          HEAD_DATE=$(git show -s --format=%cI HEAD)
+          NEW_HEAD=$(GIT_AUTHOR_DATE="$HEAD_DATE" \
+                     GIT_COMMITTER_DATE="$HEAD_DATE" \
+                     git -c user.name='public-mirror' \
+                         -c user.email="$BOT_EMAIL" \
+                       commit-tree "$NEW_TREE" -p HEAD \
+                       -m 'Regenerate CONTRIBUTORS')
+          git update-ref refs/heads/main "$NEW_HEAD"
+
+      - name: Force-push to mirror
+        run: |
+          set -euo pipefail
+          cd "$FILTERED"
+          git remote add mirror git@github-mirror:TheVoskamps/macos-setup-global-claude-public.git
+          # Defense-in-depth: if the mirror's current refs/heads/main
+          # already matches our new tip, do not push. This catches
+          # any case the CONTRIBUTORS short-circuit above misses (and
+          # keeps no-op runs from moving the remote tip even if the
+          # filter output is identical for some other reason).
+          LOCAL_TIP=$(git rev-parse refs/heads/main)
+          REMOTE_TIP=$(git ls-remote mirror refs/heads/main | awk '{print $1}')
+          # Asymmetric -n guard is deliberate: LOCAL_TIP is guaranteed
+          # non-empty (git rev-parse without --verify hard-fails under
+          # set -e if refs/heads/main is missing locally), while
+          # REMOTE_TIP is legitimately empty on a fresh mirror that has
+          # no refs/heads/main yet (bootstrap case — fall through to
+          # the push so the mirror gets its first commit).
+          if [ -n "$REMOTE_TIP" ] && [ "$LOCAL_TIP" = "$REMOTE_TIP" ]; then
+            echo "Mirror refs/heads/main already at $LOCAL_TIP; nothing to push."
+            exit 0
+          fi
+          git push --force mirror refs/heads/main:refs/heads/main

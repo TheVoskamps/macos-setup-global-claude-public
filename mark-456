@@ -1,0 +1,331 @@
+# Cross-Engineer Learnings Aggregation System
+
+A bidirectional pipeline for promoting and demoting Claude Code learnings across the layered knowledge hierarchy, designed for hundreds of engineers across 100+ repos.
+
+---
+
+## Problem
+
+Claude Code captures learnings in three substrates:
+
+1. **Auto memory** at `~/.claude/projects/<dash-encoded-path>/memory/*.md` — Claude's own notebook, machine-local per engineer, edited autonomously by Claude (and by Auto Dream consolidation passes).
+2. **Per-repo `CLAUDE.md` and `.claude/rules/*.md`** — committed to the repo, edited by engineers and by Claude Code agents during sessions.
+3. **User-level `~/.claude/CLAUDE.md` and `~/.claude/rules/*.md`** — shared across the org via a synced dotfiles repo.
+
+Auto memory is explicitly machine-local per Anthropic's docs. Most learnings, in practice, are not personal — they are tool quirks, git workflow universals, code review philosophy, or stack-shared patterns that apply across engineers and repos. Currently, the layer at which a learning gets stored is decided implicitly by Claude based on which session noticed it, not by where the learning actually applies. The result is hundreds of engineers independently rediscovering the same gotchas.
+
+Separately: Claude Code agents committing to `CLAUDE.md` and `.claude/rules/*.md` in repos are a *source* of learnings that may need to bubble up to the org or enterprise layer. And when a learning lands at a higher layer, the lower-layer copies must be cleansed or they drift.
+
+The system is bidirectional: upward promotion of learnings, downward cleanup when promotion lands.
+
+---
+
+## Layered Hierarchy of Knowledge
+
+In priority order (most universal at top):
+
+| Layer | Location | Scope |
+|---|---|---|
+| Enterprise policy | OS managed-policy `CLAUDE.md` path | Org-wide, IT-managed, cannot be excluded |
+| Org-shared user-level | `~/.claude/CLAUDE.md`, `~/.claude/rules/*.md` | All engineers, distributed via dotfiles repo |
+| Stack-shared | `~/.claude/rules/<stack>.md` with path scoping | Engineers working on a given stack |
+| Per-repo committed | `<repo>/CLAUDE.md`, `<repo>/.claude/rules/*.md` | Team working on the repo |
+| Per-repo per-engineer | `~/.claude/projects/<key>/memory/` | One engineer, one repo, one machine |
+
+Every learning lives at exactly one canonical layer. Duplication across layers is a bug the system is designed to detect and resolve.
+
+The dotfiles repo (`~/.claude` as a GitHub repo) gates which subdirectories are shared via `.gitignore` whitelist:
+
+```
+!/agents/
+!/commands/
+!/hooks/
+!/memory/
+!/output-styles/
+!/plans/
+!/rules/
+!/skills/
+!/CLAUDE.md
+!/settings.json
+!/keybindings.json
+```
+
+Auto memory at `~/.claude/projects/` is excluded — it stays per-machine. The `memory/` directory at the top level is reserved for the harvester project itself (not a redirect of `autoMemoryDirectory`).
+
+### Loading Semantics That Drive This Design
+
+The hierarchy table reads as priority order, but Claude Code memory files don't actually *override* each other — they **concatenate** into context, top-down from most universal to most specific. "Specificity wins" emerges at inference time because more-specific files appear later in the prompt, not because anything was suppressed during loading. Three implications fall out of this:
+
+**Duplication is not redundant — it's actively harmful.** If the same rule exists in `~/.claude/rules/git-workflow.md` (eager-loaded at session start) and in `<repo>/.claude/rules/git.md` (also eager-loaded if no `paths:` frontmatter), Claude reads both, into the same context, every session. This is the core argument for the cleanup half of the system: leaving the lower-layer copy after promotion isn't just messy, it inflates context budget on every session that engineer runs in that repo.
+
+**Path scoping (`paths:` frontmatter) is the load-budget mechanism.** Rules in `.claude/rules/*.md` *without* `paths:` frontmatter eager-load at session start. Rules *with* `paths:` frontmatter are lazy-loaded — pulled in only when Claude touches a matching file. For the stack-shared layer to work at scale (engineers with 20+ stack rules across Python, AWS, Vue, Redis, etc.), every stack rule must have `paths:` frontmatter so it only loads when relevant. The classifier's `path_scope` output is not a hint — it's directly emitted as the rule file's frontmatter and is necessary for the system to function without bloating context.
+
+**Auto memory has a 200-line / 25 KB cap on `MEMORY.md`.** Only the first 200 lines or 25 KB of `MEMORY.md` eager-loads at session start. Sibling topic files in `~/.claude/projects/<key>/memory/*.md` are read on demand, with `MEMORY.md` acting as an index. The harvester therefore must read **both** `MEMORY.md` *and* all topic files in the directory — a learning the harvester cares about may never have been part of `MEMORY.md`'s loaded portion. Auto Dream consolidation moves entries between `MEMORY.md` and topic files autonomously, so the harvester cannot assume stable file location for any given learning.
+
+**Imports (`@path/to/file`) are eager despite the name.** `~/.claude/CLAUDE.md` using `@~/.claude/rules/<file>.md` imports those files at launch (max 5 hops). The `~/.claude/CLAUDE.md` → `~/.claude/rules/*.md` pattern is exactly this — it's how org-user rules reach context without each engineer having to maintain a `CLAUDE.md` listing them. The harvester's PRs against `~/.claude` add files to `rules/` and update the import block in `CLAUDE.md` if new categories appear.
+
+The settings JSON system is *separately* a true precedence stack (highest tier wins, with arrays merging across scopes) — this matters for things like `claudeMdExcludes` and `permissions.allow`, but not for memory file content. The two systems are orthogonal and the harvester operates entirely on the memory side.
+
+---
+
+## Sources of Learnings
+
+Five sources feed the pipeline. Three flow upward (promotion candidates), two trigger downward cleanup.
+
+### Upward sources
+
+1. **Local auto memory** — Engineer runs `/promote-learnings` (or a hook fires). Reads **both** `~/.claude/projects/<key>/memory/MEMORY.md` and all sibling topic files (`*.md`) in the same directory — only the first 200 lines / 25 KB of `MEMORY.md` is eager-loaded at session start, so a learning the harvester cares about may live exclusively in topic files Claude has read on demand. Local sanitizer + classifier run on each entry; sanitized entries POST to ingestion endpoint. Source metadata: `{type: auto-memory, repo, project_key, timestamp}`.
+
+2. **Per-repo `CLAUDE.md` / rules edits in PRs** — GitHub Actions workflow on `merged_pr` (merged, not opened — the team accepted it). Diffs `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/**/*.md` against merge base, extracts added/modified rules, POSTs to ingestion. Source metadata: `{type: repo-edit, repo, pr_url, timestamp}`. A repo edit is *stronger signal* than auto-memory: a human or agent already considered it worth committing.
+
+3. **Direct manual additions** by engineers — same pipeline, explicit layer hint.
+
+### Downward sources
+
+4. **User-level rules edits** (PRs against `~/.claude` dotfiles repo) — landing here triggers cleanup of redundant copies at lower layers (per-repo, auto-memory).
+
+5. **Enterprise policy edits** — same pattern at the highest layer, triggers cleanup against everything below.
+
+---
+
+## Sinks (Where Learnings Land)
+
+Promotion targets, routed by classifier. Stack-specific rules **must** carry `paths:` frontmatter (lazy-loaded, only when Claude touches matching files); universal rules without `paths:` are eager-loaded at every session start, so universality must be earned.
+
+- Tooling/Claude-Code (lock-PID, hook gotchas, MCP quirks) → `~/.claude/rules/claude-code-gotchas.md` (eager)
+- Tooling/Git universals (pull after merge) → `~/.claude/rules/git-workflow.md` (eager)
+- Process/Code-review (no broken windows) → `~/.claude/rules/code-review.md` (eager)
+- Stack-specific (Python, AWS EKS, Vue) → `~/.claude/rules/<stack>.md` with `paths:` frontmatter (lazy, scoped)
+- Org-specific conventions → `~/.claude/rules/<area>.md` (eager or lazy depending on universality across the org's repos)
+- Repo-specific → `<repo>/.claude/rules/<topic>.md` (eager within that repo only — no `paths:` needed if the rule applies repo-wide)
+- Enterprise policy → managed `CLAUDE.md` (eager, cannot be excluded)
+- Genuinely personal → leave in auto memory, no promotion
+
+The classifier's output schema (defined later) emits `path_scope` as a glob array. That value becomes the `paths:` frontmatter on the generated rule file. Empty `path_scope` means eager-load; non-empty means lazy-load with the given globs.
+
+---
+
+## Data Model (Redis Enterprise)
+
+The cluster is the central abstraction. Each cluster represents a single semantic learning regardless of where it currently exists.
+
+```
+cluster:<id> (HASH)
+  text             canonical statement of the learning
+  embedding_id     pointer to RediSearch HNSW index entry
+  status           draft | promoted | superseded
+  current_layer    enterprise | org-user | stack | repo:<name> | auto-memory
+  promoted_to      <layer> when applicable
+  promoted_at      timestamp
+  promoted_pr      URL of the PR that landed it
+  created_at       timestamp
+
+cluster:<id>:occurrences  (LIST)   raw occurrences for audit + velocity scoring
+cluster:<id>:repos        (SET)    repos where it has appeared
+cluster:<id>:supersedes   (SET)    prior cluster IDs this replaced
+cluster:<id>:tags         (SET)    taxonomy tags from classifier
+
+queue:triage      (ZSET)  cluster IDs scored by weighted occurrence count
+queue:fast-track  (ZSET)  clusters above velocity threshold
+queue:cleanup     (ZSET)  superseded clusters needing downstream cleanup
+
+repo:<name>:rules        (HASH)  rule file path -> cluster ID
+repo:<name>:claude_md    (HASH)  CLAUDE.md section -> cluster ID
+org:rules                (HASH)  ~/.claude/rules/* -> cluster ID
+enterprise:rules         (HASH)  managed CLAUDE.md sections -> cluster ID
+
+embeddings (RediSearch HNSW index)
+  field: embedding (vector)
+  field: cluster_id (tag)
+  field: layer (tag)
+```
+
+The `*:rules` indices are the key to cleanup. When a cluster gets promoted to a higher layer, you query the lower-layer indices for that cluster ID and queue cleanup PRs for every match.
+
+**No engineer identity is stored.** The velocity signal comes from raw occurrence count weighted by source type, not engineer-distinct counts. API Gateway access logs (via SigV4 from IAM Identity Center) provide audit trail of who promoted what without polluting the cluster data.
+
+---
+
+## Upward Flow (Promotion)
+
+```
+[engineer machine]                       [backend]                          [GitHub]
+                                                                          
+auto memory ─┐                                                            
+             ├─> sanitize ─> /promote-learnings ─> API Gateway ─┐         
+direct add ──┘                                                  │         
+                                                                ▼         
+                                                          ingestion       
+PR merge ─────> GitHub Action ─> diff extract ─> API ──>  Lambda          
+                                                                │         
+                                                                ▼         
+                                                          classifier      
+                                                          (Claude API)    
+                                                                │         
+                                                                ▼         
+                                                          embed +         
+                                                          RediSearch ANN  
+                                                                │         
+                                                          ┌─────┴─────┐   
+                                                          ▼           ▼   
+                                                    attach to    create   
+                                                    existing     new      
+                                                    cluster      cluster  
+                                                          │           │   
+                                                          └─────┬─────┘   
+                                                                ▼         
+                                                          score +         
+                                                          enqueue         
+                                                                │         
+                                                                ▼         
+                                                          fast-track? ──> promotion worker ──> draft PR
+                                                                                                  │
+                                                                                                  ▼
+                                                                                          (GitHub App)
+                                                                                          - ~/.claude repo
+                                                                                          - <project> repos
+                                                                                          - enterprise policy repo
+```
+
+**Velocity scoring weights.** Occurrence types are not equal:
+
+- Repo edit (someone committed it): weight 5
+- Direct engineer addition: weight 5
+- Auto-memory occurrence: weight 1
+
+Fast-track threshold is a sliding function of cluster age — recent clusters need fewer occurrences to fast-track, older clusters need more (or they get archived). Specifics deferred to empirical tuning once data flows.
+
+**Repo-edit classification.** A rule extracted from a repo PR starts at the repo layer and is a candidate for promotion *up*. The classifier distinguishes:
+
+- Genuinely repo-specific (references repo identifiers, internal service names, this repo's stack only) — correct layer, no action
+- Looks universal (no repo-specific identifiers, similar to clusters from other repos) — promotion candidate
+- Cross-corroboration: if 3+ other repos already have a textually-similar rule, near-conclusive evidence it belongs at org layer
+
+---
+
+## Downward Flow (Cleanup)
+
+When a cluster gets promoted from layer N to layer N-1 (higher = more universal), all lower-layer copies must be removed. Otherwise the same rule exists in three places, drifting independently.
+
+Trigger: PR against the destination layer's repo merges, GitHub Action fires.
+
+```
+PR merged at layer N ─> GitHub Action ─> identify cluster ID
+                                              │
+                                              ▼
+                                        query cluster:<id>:repos
+                                        and *:rules indices for
+                                        all lower-layer locations
+                                              │
+                                              ▼
+                                        enqueue (cluster_id, location)
+                                        pairs into queue:cleanup
+                                              │
+                                              ▼
+                                  ┌───────────┴───────────┐
+                                  ▼                       ▼
+                          cleanup worker            superseded marker
+                          (repo PRs)                (auto-memory targets)
+                                  │                       │
+                                  ▼                       ▼
+                          generates removal PR      next /promote-learnings
+                          via GitHub App            run on each engineer's
+                          against each repo,        machine sees superseded
+                          description references    flag, proposes local
+                          superseding rule          edits; Auto Dream cleans
+                                                    up on next pass
+```
+
+Auto-memory cleanup is per-engineer and not centrally writable — handled via a "superseded" marker on the cluster that engineers' next harvester run picks up.
+
+---
+
+## Conflict Cases
+
+The system must handle without humans:
+
+| Case | Handling |
+|---|---|
+| Concurrent promotion | Lock on `cluster:<id>:promoting`; second promotion no-ops |
+| Rule edited at higher layer mid-cleanup | Cleanup worker re-fetches canonical text before merging cleanup PR; removal still correct regardless |
+| Repo rule that legitimately overrides org rule | Detect by structural comparison: superset of constraints, or explicit reference to general rule. Flag for human review, don't auto-cleanup |
+| Cleanup PR rejected by repo owner | Mark cluster `cleanup_exempted` for that repo, don't re-propose, surface in triage UI |
+| Stale clusters | Age-based GC: no new occurrences in 6 months + no current-layer presence → archive |
+| Embedding drift (rephrased same learning becomes different cluster) | Periodic offline pass that re-clusters using stricter similarity; merges discovered duplicates |
+
+---
+
+## Stack Decisions
+
+| Component | Choice | Rationale |
+|---|---|---|
+| Cluster store | Redis Enterprise with AOF | Already operational; RediSearch HNSW for vectors in same cluster; better persistence than MemoryDB; Active-Active CRDTs available |
+| Vector index | RediSearch HNSW | Same cluster as cluster store, single query path, no external vector DB |
+| Ingestion API | API Gateway + Lambda, SigV4 via Okta → IAM Identity Center | Inherits org SSO; access logs provide audit of who promoted what without storing identity in cluster data |
+| Audit log | SQS → Lambda → S3 with daily-rotated append-only objects | Standard append-only pattern; Athena-queryable later; decouples ingestion from audit retention |
+| Classifier + embeddings | Claude API from ingestion Lambda | No infra to run; uses same model family as Claude Code itself |
+| Promotion worker | Scheduled Lambda | Drains fast-track queue; drafts PRs via GitHub App |
+| GitHub identity | Existing GitHub App (no personal credentials, no generated-by trailers) | Inherits supply-chain hardening posture; clean PR attribution |
+| Triage UI | React + TypeScript, S3 + CloudFront, API Gateway behind SigV4 SSO | Internal tool for DevEx; bundler chosen at build time |
+| Lambdas | TypeScript on Node 20 | Same language as UI and CDK; first-class AWS SDK v3 and Anthropic SDK support; fast cold start; I/O-bound workload doesn't need a faster runtime |
+| Infrastructure | CDK in TypeScript | Same language as runtime; no separate infra DSL |
+| Local sources | `/promote-learnings` slash command + GitHub Actions on merged PRs; TypeScript scripts invoked from Markdown commands | Distributed via existing `~/.claude` dotfiles repo (commands and hooks already in share list) |
+
+**TypeScript everywhere.** Frontend, Lambdas, CDK, local scripts. One language, one toolchain, one set of types shared between API request/response shapes and the UI consuming them.
+
+**No server framework.** Lambdas are individual handlers parsing events, calling Claude, hitting Redis, returning. There is no long-running process to host, no request multiplexing, no ASGI/middleware to configure. The framework is the Lambda runtime.
+
+**Explicitly rejected:**
+- MemoryDB (good for prototyping, insufficient for production)
+- Redis Streams as audit log (use SQS → S3)
+- Storing engineer identity in cluster data (not needed; velocity from weighted occurrences; audit from API Gateway logs)
+- DynamoDB (Redis Enterprise is the operational muscle)
+- Quasar for the triage UI (overkill for internal tool)
+- FastAPI / any server framework (no long-running process exists in this architecture; was a legacy-project-ism that doesn't belong in greenfield)
+- Python or Rust for Lambdas (TypeScript wins for language unification with frontend and CDK; workload is I/O-bound so Rust's CPU performance is wasted)
+
+---
+
+## Sequencing / Rollout
+
+| Phase | Scope | Dependencies |
+|---|---|---|
+| 1 | Local-only `/promote-learnings` for one engineer (Edwin). No backend. Classify-and-draft-PR locally. | Validates taxonomy + routing logic. |
+| 2 | Ingestion endpoint + Redis cluster store + cross-source dedup, no opt-out. Upward promotion only. | Phase 1 taxonomy. |
+| 3 | GitHub Actions for repo `CLAUDE.md` / `rules` extraction (Source 2). Agent-authored repo learnings feed pipeline. | Phase 2 backend. |
+| 4 | Cleanup workers, auto-memory direction first (lowest blast radius — superseded markers are advisory until engineers harvest). | Phase 3. |
+| 5 | Cleanup workers for repo cleanup PRs. Higher blast radius — needs solid conflict handling. | Phase 4. |
+| 6 | Enterprise policy as a source. Full org-user → repo cleanup path. | Phase 5. |
+
+Each phase is independently useful. Phases 1-3 deliver the upward flow before any downward complexity ships.
+
+---
+
+## Operational Pieces
+
+- **No engineer identity in cluster data.** API Gateway access logs (SigV4 from IAM Identity Center) cover audit. Cluster data is identity-free for clustering purposes.
+- **Audit log via SQS → S3, daily rotation.** Athena-queryable for "why does this rule exist" investigations months later.
+- **Triage UI**: React SPA. Screens: fast-track queue, triage queue, cluster detail with occurrences, promote/reject buttons. APIs: `GET /clusters?queue=...`, `GET /clusters/<id>`, `POST /clusters/<id>/promote`, `POST /clusters/<id>/reject`.
+- **Sanitizer**: structural pass (regex for paths, emails, AWS account IDs, IPs) + Claude API pass ("does this entry contain anything that shouldn't leave the engineer's machine"). Runs locally in `/promote-learnings` *before* upload. Cheap insurance.
+- **Verification of generated rules.** When the harvester lands a PR, the affected engineers' next session can be checked via `/memory` (lists every memory file currently loaded), `/status` (shows active settings sources), and the `InstructionsLoaded` hook (logs which instruction files load and why). For path-scoped rules in particular, `InstructionsLoaded` is the canonical way to confirm `paths:` frontmatter is firing as intended — silent failure here looks identical to "the rule didn't help" and is otherwise hard to detect.
+- **No assumption about `~/.claude/CLAUDE.local.md` or `.claude/CLAUDE.local.md`.** Neither is documented as a load location. The user-scope `CLAUDE.local.md` only exists at the project root (`./CLAUDE.local.md`) and is gitignored. The harvester does not target these locations — it writes to `~/.claude/CLAUDE.md` (committed to dotfiles repo) and `<repo>/.claude/rules/*.md` (committed to project repos), both of which have well-defined loading semantics.
+
+---
+
+## Deferred to v2 / Open Questions
+
+- **Cleanup of redundant repo rules** when org-level rule lands. Needs solid conflict handling to avoid blasting unwanted PRs across 100+ repos. Phase 5.
+- **Embedding similarity threshold tuning.** Won't know the right values until real auto-memory data flows. The piece that determines whether clusters end up coherent or drift.
+- **Stack-shared layer mechanics.** Settled by the loading semantics: stack rules go in `~/.claude/rules/<stack>.md` with `paths:` frontmatter so they lazy-load only when Claude touches matching files. A separately-imported shared knowledge repo is unnecessary unless the org wants per-team rule subsets that not all engineers should receive — at which point the dotfiles repo's whitelist mechanism could fork into per-team variants. Defer that until evidence demands it.
+- **Cross-repo abstraction (the original "100+ repos" question).** Once the harvester is operating, Claude can do the abstraction itself by looking at deduplicated learnings across the corpus. Not a separate system to design.
+- **Feedback to Anthropic on Claude Code defaults.** The git-pull-after-merge example is a learning Claude shouldn't need; suggests defaults could be tighter. Out of band from this system.
+
+---
+
+## Concrete Examples (from current auto memory)
+
+| Learning | Current location | Should land at |
+|---|---|---|
+| `git pull --ff-only` after `gh pr merge` | per-repo auto memory | org-user — `~/.claude/rules/git-workflow.md` |
+| Fix all PR findings + pre-existing inconsistencies in same PR | per-repo auto memory | org-user — `~/.claude/rules/code-review.md` |
+| Don't kill the PID in a subagent worktree's lock file (it's the orchestrator) | per-repo auto memory | enterprise / upstream Claude Code docs gap |

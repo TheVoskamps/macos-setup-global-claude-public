@@ -1,0 +1,103 @@
+name: public-mirror
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: public-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-filter-repo
+        run: |
+          python3 -m pip install --user git-filter-repo
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Set up SSH deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.PUBLIC_MIRROR_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_mirror
+          chmod 600 ~/.ssh/id_mirror
+          # NOTE: ssh-keyscan is TOFU (Trust-On-First-Use) — the very
+          # first run trusts whatever key the GitHub IP returns. The
+          # GitHub-hosted runner is reaching GitHub from inside the
+          # same provider's network on every run, so the practical
+          # attack surface is narrow, but pinning is stronger. If
+          # this workflow is ever ported off GitHub-hosted runners,
+          # replace this line with pinned host keys fetched from
+          # https://api.github.com/meta (the `ssh_keys` field, with
+          # the connection itself trusted via TLS PKI).
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host github-mirror
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/id_mirror
+            IdentitiesOnly yes
+          EOF
+
+      - name: Filter into a fresh bare clone
+        env:
+          CONF: ${{ github.workspace }}/.github/public-mirror
+        run: |
+          set -euo pipefail
+          WORK=$(mktemp -d)
+          git clone --bare . "$WORK/src.git"
+          cd "$WORK/src.git"
+          git filter-repo \
+            --paths-from-file "$CONF/paths.allowlist" \
+            --mailmap "$CONF/mailmap"
+          echo "FILTERED=$WORK/src.git" >> "$GITHUB_ENV"
+
+      - name: Regenerate CONTRIBUTORS
+        env:
+          CONF: ${{ github.workspace }}/.github/public-mirror
+          BOT_EMAIL: public-mirror@macos-setup-global-claude.local
+        run: |
+          set -euo pipefail
+          cd "$FILTERED"
+          # Build the new file content in $RUNNER_TEMP (the bare clone
+          # has no working tree to write into), then insert it as a
+          # blob and synthesize a new tree that adds the CONTRIBUTORS
+          # entry on top of HEAD's existing tree.
+          {
+            cat "$CONF/CONTRIBUTORS.template"
+            echo
+            git shortlog -sne --all
+          } > "${RUNNER_TEMP}/CONTRIBUTORS"
+          BLOB=$(git hash-object -w "${RUNNER_TEMP}/CONTRIBUTORS")
+          # Reuse HEAD's tree as the base, then overlay the new blob
+          # via a temporary index. read-tree loads HEAD's tree into
+          # the index; update-index --add registers the new blob;
+          # write-tree emits the resulting tree SHA.
+          export GIT_INDEX_FILE="${RUNNER_TEMP}/idx"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree HEAD
+          git update-index --add --cacheinfo "100644,$BLOB,CONTRIBUTORS"
+          NEW_TREE=$(git write-tree)
+          unset GIT_INDEX_FILE
+          NEW_HEAD=$(git -c user.name='public-mirror' \
+                         -c user.email="$BOT_EMAIL" \
+                       commit-tree "$NEW_TREE" -p HEAD \
+                       -m 'Regenerate CONTRIBUTORS')
+          git update-ref refs/heads/main "$NEW_HEAD"
+
+      - name: Force-push to mirror
+        run: |
+          set -euo pipefail
+          cd "$FILTERED"
+          git remote add mirror git@github-mirror:TheVoskamps/macos-setup-global-claude-public.git
+          git push --force mirror refs/heads/main:refs/heads/main

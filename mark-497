@@ -1,0 +1,45 @@
+# Allowlist for the public mirror.
+#
+# Lines starting with `#` and blank lines are ignored. Every other
+# line is a path or path prefix passed to `git-filter-repo
+# --paths-from-file`. Anything not matched is excluded from the
+# mirror (fail-safe for new sensitive files).
+#
+# The starting set below contains the files commonly safe to ship.
+# Add repo-specific paths below the marker. Audit additions
+# carefully — paths NOT on this list are excluded, but paths that
+# ARE on this list ship verbatim.
+#
+# Do NOT add `.github/` or `.gitignore`:
+# - `.github/workflows/public-mirror.yml` and `.github/public-mirror/`
+#   are upstream-only plumbing. Including them makes the workflow's
+#   force-push fail with "refusing to allow an OAuth App to create or
+#   update workflow ... without `workflow` scope" — deploy keys cannot
+#   write workflow files.
+# - `.gitignore` only matters for someone running `git add` in the
+#   working tree. The mirror is read-only (force-pushed by the
+#   workflow), so it serves no purpose there.
+# - `pull_request_template.md` doesn't make sense to ship from the
+#   source: the source's template (if any) would say "describe your
+#   change", but the mirror needs a "PRs not accepted, go upstream"
+#   message. One file can't serve both meanings. The mirror's
+#   read-only banner lives in README.md and Issues are disabled at
+#   the repo level, so a PR-template redirect isn't load-bearing.
+
+# --- conventionally shipped (remove any you don't want public) ---
+README.md
+LICENSE
+PATENTS
+PRIOR_ART.md
+CODEOWNERS
+
+# --- repo-specific (add below) ---
+# Ships the self-contained install script; also the payload dir #151 populates.
+.global-claude-config/
+CLAUDE.md
+agents/
+skills/
+rules/
+hooks/
+keybindings.json
+settings.json

@@ -1,0 +1,12 @@
+# Per-author mailmap used by the public-mirror workflow.
+#
+# Each line maps a private email to a `<localpart>@global-claude-config.local`
+# form. The `.local` TLD is RFC-reserved and non-routable, and
+# embedding the source repo short name makes the mirror's origin
+# obvious. `git-filter-repo --mailmap` rewrites author/committer
+# emails on every filtered commit.
+#
+# Add a new entry here when a new author appears in the source repo.
+
+Edwin Voskamp <35160149+evoskamp@global-claude-config.local> <35160149+evoskamp@users.noreply.github.com>
+Edwin Voskamp <edwin.github.com@global-claude-config.local> <edwin.github.com@voskamp.org>

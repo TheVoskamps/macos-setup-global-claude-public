@@ -1,0 +1,82 @@
+# Invert: .gitignore everything, so invert what we want to NOT .gitignore
+/*
+
+# Standard Repo Files
+!.gitignore
+!.github/
+!.github/**
+# Belt-and-braces: re-ignore the public-mirror workflow's runtime
+# artifact so it can never be accidentally committed from the source
+# tree. The .github/** un-ignore above would otherwise make this
+# generated file git-add-able. This negation must come AFTER that
+# un-ignore — gitignore is last-match-wins (see issue #157 / PR #159).
+.github/public-mirror/replacements.clean.txt
+!/LICENSE
+!/PATENTS
+!/PRIOR_ART.md
+!/README.md
+!/.markdownlint.jsonc
+
+# Claude config — whitelist shareable files, ignore everything else.
+# New Claude-generated dirs (cache, sessions, projects, todos, ...) stay
+# ignored by default. Add them to the allow-list explicitly if needed.
+# Re-including a file inside an ignored dir requires un-ignoring each
+# parent first (git's negation rule).
+!/agents/
+!/designs/
+!/hooks/
+!/memory/
+!/output-styles/
+!/plans/
+!/rules/
+!/skills/
+!/CLAUDE.md
+!/settings.json
+!/keybindings.json
+
+# Per-repo config for /issue-address and friends. Lives in the
+# *nested* .claude/ (this repo's root IS ~/.claude, so .claude/ here
+# is the per-repo config for using ~/.claude on itself). Each parent
+# must be un-ignored before the file becomes visible to git.
+!/.claude/
+!/.claude/rules/
+!/.claude/rules/repo-config.md
+
+# Always ignore local/temp/backup/lock files anywhere under .claude/,
+# even inside whitelisted directories
+/**/*.local.*
+/**/*.backup.*
+/**/*.lock
+/**/tmp/
+/**/worktrees/
+
+# Repo-root CLAUDE override files (sibling to CLAUDE.md)
+/CLAUDE.local.*
+
+# Backup files from Claude setup
+*.backup.*
+
+#
+# Below this should be excluded, but it is belt-and-braces
+#
+
+# macOS Finder metadata and temp dirs
+.DS_Store
+__MACOSX/
+
+# macOS system files
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Git repo metadata
+.git/
+
+# Misc
+*.log
+*.tmp
+
+#VSCode swapfile
+*.swp
+

@@ -1,0 +1,369 @@
+# Multi-Target Mirror for `example-infra-repo`
+
+Goal: mirror a single private source repo (`ExampleProject/example-infra-repo`)
+to **two or more private target repos in other orgs**, each with its **own**
+filter configuration, over a single GitHub Actions workflow.
+
+This generalizes the existing single-target `repo-public-mirror-setup` skill
+(private→public, one target) into a multi-target, all-private variant. Every
+target is **always filtered** — there is no full/faithful-mirror mode. The
+only per-target axis beyond the destination and its filter config is whether
+author emails are rewritten (`mailmap=on|off`).
+
+> **Scope note.** This document lives in `global-claude-config` because the
+> mirror machinery (the skill, the workflow template) lives here. The work it
+> describes targets `ExampleProject/example-infra-repo`, a *different* repository.
+> Nothing in `example-infra-repo` is read or modified by writing this doc.
+> Implementing the design means creating the workflow and per-target config
+> **in that repo**, in a session rooted there.
+
+---
+
+## 1. Why always-filtered, never full
+
+A faithful "push everything" mirror was considered and rejected:
+
+- It would ship `.claude/`, `memory/`, and anything ever committed to history
+  verbatim — including any secret that ever landed in a commit. For a source
+  like an infra repo that is a real hazard.
+- It would include `.github/workflows/`. GitHub deploy keys lack the
+  `workflow` OAuth scope, so a push whose diff touches `.github/workflows/`
+  is rejected:
+
+  > refusing to allow an OAuth App to create or update workflow … without
+  > `workflow` scope
+
+  A faithful mirror over a deploy key therefore cannot work without a PAT or
+  GitHub App that carries `workflow` scope — broadening the auth surface for
+  no benefit here.
+
+Both problems vanish when every target is filtered: the allowlist excludes
+`.github/workflows/` (and anything else not explicitly listed), so per-target
+**deploy keys** are sufficient and the auth surface stays minimal. This is the
+same reasoning that already governs the public-mirror allowlist (see
+`.github/public-mirror/paths.allowlist` in `global-claude-config`, the "Do NOT
+add `.github/`" note).
+
+---
+
+## 2. The per-target definition model
+
+The source repo holds **one directory per target** under `.github/mirrors/`:
+
+```text
+.github/
+  mirrors/
+    <target-id-1>/
+      target.conf        # destination + per-target knobs
+      paths.allowlist    # per-target path allowlist
+      replacements.txt   # per-target value-scrubbing rules
+      mailmap            # present only when mailmap=on
+      CONTRIBUTORS.template
+    <target-id-2>/
+      target.conf
+      paths.allowlist
+      replacements.txt
+      CONTRIBUTORS.template   # mailmap=off here → no mailmap file
+  workflows/
+    multi-mirror.yml     # one workflow, matrixed over the target dirs
+```
+
+`<target-id>` is an arbitrary slug the operator picks (e.g. `acme`,
+`partner-eu`). It names the directory, the SSH host alias, the key filename,
+and the bookkeeping branches, so it must be unique and shell/ref-safe
+(`[a-z0-9-]+`).
+
+### `target.conf` (one per target)
+
+A flat `key = value` file (parsed with a trivial grep/awk in the workflow,
+not a YAML dependency):
+
+```ini
+# Destination repo (SSH form; can be any org).
+url          = git@github.com:OtherOrg/example-infra-mirror.git
+
+# Name of the source-repo Actions secret holding THIS target's
+# write-enabled deploy-key private half.
+secret       = MIRROR_KEY_ACME
+
+# Rewrite author/committer emails for this target?
+#   on  → pass --mailmap (recipients see <localpart>@<domain>.local)
+#   off → omit --mailmap (recipients see REAL author identities)
+mailmap      = off
+
+# Per-target bookkeeping branch names on the TARGET repo. MUST be
+# unique per target — sharing them across targets silently corrupts
+# each target's SHA-stability marks.
+state_branch = mirror-state-acme
+meta_branch  = mirror-meta-acme
+```
+
+### `mailmap=on|off` — the only per-target behavior switch
+
+`on` reproduces the public-mirror behavior: `--mailmap` rewrites author and
+committer emails to a `<localpart>@<domain>.local` form so real addresses
+don't ship. `off` omits the `--mailmap` flag entirely, so the target receives
+the **real** author identities — appropriate when the recipients are trusted
+people who should see who made each change.
+
+Consequence to document for `mailmap=off` targets (verified from the existing
+workflow): the `Regenerate CONTRIBUTORS` step builds the file from
+`git shortlog -sne refs/heads/main` (excluding the mirror bot), which reads
+whatever emails are in the rewritten history.
+With `mailmap=off`, `CONTRIBUTORS` will list the **real** emails. That is
+consistent with the intent of an `off` target, but it is a direct consequence
+worth stating so nobody is surprised that real addresses appear in
+`CONTRIBUTORS` there.
+
+Everything else — `paths.allowlist`, `replacements.txt`, `CONTRIBUTORS`
+regeneration, and the `--state-branch` SHA-stability machinery — applies to
+every target regardless of the `mailmap` setting.
+
+---
+
+## 3. Workflow restructure
+
+One workflow (`multi-mirror.yml`) runs a **matrix** with one job per target.
+Differences from the current single-target `public-mirror.yml`:
+
+### 3.1 Matrix over targets
+
+```yaml
+name: multi-mirror
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false        # one target failing must not block the others
+      matrix:
+        include:
+          - target: acme
+            secret_name: MIRROR_KEY_ACME
+          - target: partner-eu
+            secret_name: MIRROR_KEY_PARTNER_EU
+    concurrency:
+      group: multi-mirror-${{ matrix.target }}   # serialize each target vs itself
+      cancel-in-progress: false
+    steps:
+      ...
+```
+
+**Why the matrix is hand-listed, not auto-discovered.** GitHub Actions cannot
+index `secrets.*` by a string computed at runtime — `secrets[matrix.foo]`
+is **not** supported in the `env:`/`with:` contexts where the key is needed.
+The realistic pattern is to enumerate each target's `{target, secret_name}` in
+the matrix `include:` block and reference `secrets[matrix.secret_name]` only in
+a `run:` step's `env:` (where dynamic secret indexing *is* permitted via the
+`secrets` context passed through). The matrix list is the one piece of the
+multi-target setup that is edited by hand (or generated by the skill) when a
+target is added or removed; the per-target *config* still lives entirely in
+`.github/mirrors/<target>/`.
+
+> Open implementation detail to confirm at build time: the exact mechanism for
+> getting a matrix-selected secret into a step. The robust, well-documented
+> form is `env: KEY: ${{ secrets[matrix.secret_name] }}` on the step. Verify
+> against current Actions behavior before relying on it; if dynamic indexing is
+> restricted in the target's runner, fall back to a `secret_name`→value mapping
+> step. (Labelled as **unverified** — confirm with a one-job smoke test.)
+
+### 3.2 Per-target SSH isolation
+
+Concurrent matrix jobs share nothing on disk between each other (separate
+runners), so in practice each job has its own `~/.ssh`. But to keep each job
+self-describing and avoid any assumption of isolation, name the key file and
+host alias per target:
+
+```bash
+KEY=~/.ssh/id_mirror_${{ matrix.target }}
+printf '%s\n' "$DEPLOY_KEY" > "$KEY"
+chmod 600 "$KEY"
+cat >> ~/.ssh/config <<EOF
+Host github-mirror-${{ matrix.target }}
+  HostName github.com
+  User git
+  IdentityFile $KEY
+  IdentitiesOnly yes
+EOF
+```
+
+The target's `url` in `target.conf` uses the matching alias, e.g.
+`git@github-mirror-acme:OtherOrg/...`. (Or keep `url` as the plain
+`git@github.com:...` form and rely on a single `IdentityFile` per job — either
+works since jobs don't share a runner. The aliased form is more explicit and
+survives a hypothetical future move to a shared runner.)
+
+### 3.3 Per-target filter config and bookkeeping
+
+The filter step is the existing one, with every config path and branch name
+parameterized by `matrix.target`:
+
+```bash
+CONF=${{ github.workspace }}/.github/mirrors/${{ matrix.target }}
+MIRROR_URL=$(awk -F' *= *' '/^url/{print $2}' "$CONF/target.conf")
+STATE_BRANCH=$(awk -F' *= *' '/^state_branch/{print $2}' "$CONF/target.conf")
+META_BRANCH=$(awk -F' *= *' '/^meta_branch/{print $2}' "$CONF/target.conf")
+MAILMAP_MODE=$(awk -F' *= *' '/^mailmap/{print $2}' "$CONF/target.conf")
+```
+
+The fingerprint that decides whether to refilter must hash **this target's**
+inputs only: `paths.allowlist` + `replacements.clean.txt` + (the `mailmap`
+file *iff* `mailmap=on`). Keeping it per-target means editing one target's
+config never force-pushes another target.
+
+The `git filter-repo` invocation conditionally includes `--mailmap`:
+
+```bash
+FILTER_ARGS=(
+  --paths-from-file "$CONF/paths.allowlist"
+  --replace-text   "$CONF/replacements.clean.txt"
+  --replace-message "$CONF/replacements.clean.txt"
+  --state-branch   "$STATE_BRANCH"
+  --prune-empty=never
+)
+if [ "$MAILMAP_MODE" = "on" ]; then
+  FILTER_ARGS+=( --mailmap "$CONF/mailmap" )
+fi
+git filter-repo "${FILTER_ARGS[@]}"
+```
+
+Everything downstream (the `replacements.clean.txt` comment-stripping
+allow-list grep, the meta-branch fingerprint commit, the `CONTRIBUTORS`
+regeneration, the no-op-detecting force-push guards) is carried over verbatim
+from `public-mirror.yml`, just rooted at the per-target `$CONF` and using the
+per-target branch names.
+
+### 3.4 State-branch isolation is mandatory
+
+The `--state-branch` / `--meta` branches hold the source-commit→public-commit
+SHA mapping that makes a consumer's `git pull` fast-forward instead of seeing
+the whole history rewritten. Each target's filtered history is **different**
+(different allowlist, different replacements, maybe mailmap on vs off), so the
+SHA mappings differ. Two targets sharing a state branch would each overwrite
+the other's marks on every run, forcing a full rewrite-and-force-push on every
+target every time. Hence the per-target `state_branch` / `meta_branch` in
+`target.conf`, validated unique by the skill.
+
+---
+
+## 4. Auth: per-target deploy keys
+
+- Generate **one ed25519 keypair per target repo**, out-of-band
+  (`ssh-keygen` — key generation is blocked for the agent by `settings.json`).
+  Suggested naming: `~/.ssh/example-mirror-<target>`.
+- The **public half** is installed as a **write-enabled deploy key** on each
+  target repo: `gh repo deploy-key add <pub> --repo OtherOrg/<repo>
+  --title example-multi-mirror --allow-write`. This requires **admin on the
+  target repo**, done by whoever administers that org. Cross-org needs **no**
+  org-to-org trust relationship — a deploy key is scoped to exactly one repo.
+- The **private half** is stored as a distinctly-named Actions secret on the
+  **source** repo, matching `target.conf`'s `secret` / the matrix
+  `secret_name`: `gh secret set MIRROR_KEY_ACME --repo ExampleProject/example-infra-repo
+  < ~/.ssh/example-mirror-acme`.
+
+Why deploy keys and not a PAT/app: narrowest possible scope (write to exactly
+one repo, nothing else), no dependency on org membership, and they work
+cross-org without any shared identity. The only cost is one key install per
+target, which is a one-time admin action on each target repo.
+
+---
+
+## 5. Target-repo posture (per target)
+
+For each private target, mirror the read-only enforcement the public skill
+applies, minus the public-specific bits (no "Issues open for triage" posture —
+these are private trusted targets):
+
+- A **ruleset on the default branch** with `deletion`, `non_fast_forward`,
+  `update` rules, and a repo-admin bypass actor — so only the workflow's
+  force-push (and admins) can write. This blocks accidental direct pushes by
+  collaborators on the target side.
+- `allow_force_pushes` is effectively granted to the workflow via the admin
+  bypass; the ruleset still blocks force-pushes from non-bypass actors.
+- The target is a **mirror**: a banner README (optional) explaining that the
+  repo is generated upstream and that changes go to the source. Unlike the
+  public mirror, Issues/Discussions posture is the operator's call per target.
+
+This posture is applied per target repo by someone with admin there. The skill
+(Section 7) can emit the `gh api` calls but cannot apply them in an org where
+the operator lacks admin.
+
+---
+
+## 6. Caveats carried over from the single-target design
+
+These are inherited from `repo-public-mirror-setup` and still apply per target:
+
+- **`--prune-empty=never` leaks excluded-path activity.** Source commits that
+  touch only excluded paths appear as empty commits with their **original
+  commit messages** intact. Timing and commit-message text for excluded-path
+  changes are exposed even though the diff payload is not. Accepted cost for
+  SHA stability. For a `mailmap=off` target the author of those empty commits
+  is also the real identity.
+- **The allowlist is the security boundary.** It is fail-safe for *new* files
+  (anything not listed is excluded), but anything *listed* ships verbatim,
+  including its full history. The operator must audit each target's dry-run
+  tree before the first push. `replacements.txt` is defense-in-depth on the
+  *content* of shipped paths, not a substitute for the allowlist.
+- **`replacements.txt` must keep the comment-stripping step.** filter-repo's
+  `--replace-text`/`--replace-message` parsers do not skip `#` lines; the
+  workflow strips comments via an allow-list grep
+  (`grep -E '^(literal:|regex:|glob:)'`) into an ephemeral
+  `replacements.clean.txt`. Every rule must carry a `literal:`/`regex:`/`glob:`
+  prefix. (Issue #157 in `global-claude-config` is the origin of this.)
+- **A config change force-pushes that one target's `main`.** Editing a
+  target's `paths.allowlist`, `replacements.txt`, or (if on) `mailmap` trips
+  the per-target fingerprint and rebuilds that target's history from scratch.
+  Consumers of that target do a one-time `git fetch && git reset --hard`.
+  Because the fingerprint is per-target, this never touches the other targets.
+
+---
+
+## 7. How the skill would change (optional follow-up)
+
+The existing `repo-public-mirror-setup` skill is single-target and
+public-specific (it creates a *public* repo, opens Issues, applies the
+public ruleset). Rather than overload it, the recommendation is a **sibling
+skill** (working name `repo-multi-mirror-setup`) that:
+
+1. Operates on the current (private) source repo.
+2. Manages a **set** of targets under `.github/mirrors/<id>/`, each
+   add/remove/reconcile being idempotent.
+3. Per target, walks the same halts the public skill uses (confirm derived
+   values → populate allowlist → review dry-run tree) **before** any push.
+4. Validates uniqueness of `state_branch`/`meta_branch` across targets and
+   that each `secret` named in `target.conf` exists / gets set.
+5. Maintains the matrix `include:` list in `multi-mirror.yml` to match the
+   target directories (the one hand-maintained coupling from §3.1).
+6. Emits — but does not apply where the operator lacks admin — the target-repo
+   posture `gh api` calls from §5.
+
+Keeping it a sibling avoids entangling the public-mirror posture logic
+(Issues-open, public ruleset, mailmap-always-on) with the private multi-target
+case (private targets, per-target mailmap, per-target posture). The two share
+the *filter-repo core*; that core could later be factored into a shared
+include if drift between them becomes a maintenance problem.
+
+---
+
+## 8. Open decisions for review
+
+1. **Matrix secret indexing (§3.1).** Confirm with a one-job smoke test that
+   `env: KEY: ${{ secrets[matrix.secret_name] }}` resolves on the target
+   runner before building the full matrix. Labelled **unverified**.
+2. **SSH alias vs. single IdentityFile (§3.2).** Both work since matrix jobs
+   don't share a runner. Pick the aliased form for explicitness, or the plain
+   form for fewer moving parts. Cosmetic; no behavioral difference today.
+3. **Sibling skill vs. extend existing (§7).** Recommendation is a sibling
+   skill. Confirm before any skill work is scheduled — and note that skill
+   work in `global-claude-config` is separate from the workflow/config work
+   in `example-infra-repo`.
+4. **Target-repo posture ownership (§5).** Applying rulesets on target repos
+   in other orgs needs admin there. Decide whether the skill emits the calls
+   for a human to run, or whether the operator has admin everywhere and the
+   skill applies them directly.

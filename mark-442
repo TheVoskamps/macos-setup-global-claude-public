@@ -1,0 +1,475 @@
+# Claude Code as a GitHub App: Setup & Auth
+
+Goal: Claude Code authenticates to GitHub as a dedicated GitHub App identity,
+not as you. Commits, pushes, PRs, and issue comments are attributed to the App.
+Your personal `~/.gitconfig` is left alone.
+
+This doc covers a GitHub Teams org. Same procedure works on Free/Pro/Enterprise;
+only the org-level UI paths differ slightly.
+
+---
+
+## 1. Register the GitHub App
+
+In the org that owns the repos:
+
+Go to **Org settings → Developer settings → GitHub Apps → New GitHub
+App**.
+
+Fill in:
+
+- **Name**: e.g. `claude-bot` (must be globally unique across GitHub; pick
+  something org-scoped if needed, like `example-claude-app`)
+- **Homepage URL**: anything; your org URL is fine
+- **Webhook**: uncheck **Active** — you don't need webhooks for local Claude
+  Code usage
+- **Repository permissions** (starter set):
+  - Contents: **Read & write**
+  - Pull requests: **Read & write**
+  - Issues: **Read & write**
+  - Metadata: **Read** (auto-selected)
+  - Checks: **Read** (lets Claude see CI status)
+  - Workflows: **Read & write** *only if* you want Claude to modify files under
+    `.github/workflows/`
+- **Where can this GitHub App be installed?**: **Only on this account**
+
+Create the App.
+
+After creation, on the App's settings page note:
+
+- **App ID** (numeric, top of the page)
+- **Slug** (from the URL:
+  `https://github.com/organizations/<org>/settings/apps/<slug>`)
+
+Then:
+
+- **Generate a private key** → downloads a `.pem` file. Store it somewhere safe;
+  you cannot re-download it.
+- Optionally rotate/regenerate later from this same page.
+
+---
+
+## 2. Install the App on your repos
+
+Still on the App's settings page: **Install App** (left nav) → choose your org →
+**Only select repositories** → pick the repos Claude should work on.
+
+After install, note the **Installation ID**. Easiest way: the install URL ends
+with `/installations/<id>`. Or query it later with the API.
+
+---
+
+## 3. Identify the App's bot identity
+
+GitHub assigns every App a synthetic user with this email format:
+
+```text
+<APP_ID>+<SLUG>[bot]@users.noreply.github.com
+```
+
+Example: App ID `1234567`, slug `claude-bot` →
+
+```text
+1234567+claude-bot[bot]@users.noreply.github.com
+```
+
+**This exact format is what makes GitHub attribute commits to the bot account
+with the `[bot]` badge.** Any other email and GitHub will just show the literal
+string.
+
+The matching display name convention is `claude-bot[bot]`.
+
+**This bot email doubles as the "is this an App repo?" signal.** The
+local-config setup in §5 sets `user.email` to exactly this string. The
+PreToolUse hook in §7.2 keys its naked-`gh` deny on
+`git config --local user.email` matching
+`*[bot]@users.noreply.github.com`. So the same value that earns the
+commit badge is what tells the hook this repo is App-managed. Keep them
+in lockstep: a repo is "App-configured" iff its local `user.email` is
+the bot address.
+
+---
+
+## 4. Local setup
+
+### 4.1 Store credentials
+
+```bash
+mkdir -p ~/.config/claude-github-app
+chmod 700 ~/.config/claude-github-app
+mv ~/Downloads/claude-bot.*.private-key.pem ~/.config/claude-github-app/private-key.pem
+chmod 600 ~/.config/claude-github-app/private-key.pem
+```
+
+Create `~/.config/claude-github-app/config`:
+
+```bash
+APP_ID=1234567
+INSTALLATION_ID=98765432
+APP_SLUG=claude-bot
+BOT_NAME="claude-bot[bot]"
+BOT_EMAIL="1234567+claude-bot[bot]@users.noreply.github.com"
+PRIVATE_KEY=~/.config/claude-github-app/private-key.pem
+```
+
+```bash
+chmod 600 ~/.config/claude-github-app/config
+```
+
+(macOS Keychain is an option for the PEM, but file perms + FileVault is fine for
+a single-user dev machine.)
+
+### 4.2 Token-minting script
+
+Installation tokens last ≤1 hour. This script mints a fresh one (cached on disk
+until ~5 min before expiry) and prints it to stdout.
+
+The cache lives at `~/.config/claude-github-app/.token-cache` — a
+`chmod 600` JSON file holding the last installation token (`ghs_…`) and
+its expiry. While valid it is a **live bearer credential**: anyone who
+reads it within the hour can act as the App. It is **disposable**
+(delete it and the next call re-mints) and must **never** be committed
+or mirrored — which it can't be, since it lives outside this repo (see
+the secret-boundary section).
+
+`~/.config/claude-github-app/get-token.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_DIR="$HOME/.config/claude-github-app"
+CACHE_FILE="$CONFIG_DIR/.token-cache"
+# shellcheck source=/dev/null
+source "$CONFIG_DIR/config"
+
+# Reuse cached token if it has >5 min left
+if [[ -f "$CACHE_FILE" ]]; then
+  expires_at=$(jq -r .expires_at_epoch "$CACHE_FILE" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  if (( expires_at - now > 300 )); then
+    jq -r .token "$CACHE_FILE"
+    exit 0
+  fi
+fi
+
+# Build JWT (RS256) signed with the App's private key
+header=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-')
+now=$(date +%s)
+payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' $((now-60)) $((now+540)) "$APP_ID" \
+  | base64 | tr -d '=' | tr '/+' '_-')
+sig=$(printf '%s.%s' "$header" "$payload" \
+  | openssl dgst -sha256 -sign "$PRIVATE_KEY" \
+  | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+jwt="$header.$payload.$sig"
+
+# Exchange JWT for installation token
+resp=$(curl -sS -X POST \
+  -H "Authorization: Bearer $jwt" \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/app/installations/$INSTALLATION_ID/access_tokens")
+
+token=$(echo "$resp" | jq -r .token)
+expires_at=$(echo "$resp" | jq -r .expires_at)
+
+if [[ "$token" == "null" || -z "$token" ]]; then
+  echo "Failed to mint installation token: $resp" >&2
+  exit 1
+fi
+
+expires_at_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$expires_at" +%s 2>/dev/null \
+  || date -d "$expires_at" +%s)
+
+jq -n --arg t "$token" --arg ea "$expires_at" --argjson eae "$expires_at_epoch" \
+  '{token:$t, expires_at:$ea, expires_at_epoch:$eae}' > "$CACHE_FILE"
+chmod 600 "$CACHE_FILE"
+
+echo "$token"
+```
+
+```bash
+chmod 700 ~/.config/claude-github-app/get-token.sh
+```
+
+Test it:
+
+```bash
+~/.config/claude-github-app/get-token.sh
+# → ghs_xxxxxxxxxxxxxxxxxxxx
+```
+
+### 4.3 Git credential helper
+
+Tell git to use the App token as the password for HTTPS GitHub URLs.
+
+`~/.config/claude-github-app/credential-helper.sh`:
+
+```bash
+#!/usr/bin/env bash
+# git invokes this with `get` and passes protocol=/host= on stdin.
+# Echo those back plus the App token so git matches the credential correctly.
+if [[ "${1:-}" == "get" ]]; then
+  while IFS='=' read -r key value; do
+    [[ -z "$key" ]] && break
+    case "$key" in
+      protocol|host) echo "$key=$value" ;;
+    esac
+  done
+  echo "username=x-access-token"
+  echo "password=$(~/.config/claude-github-app/get-token.sh)"
+fi
+```
+
+```bash
+chmod 700 ~/.config/claude-github-app/credential-helper.sh
+```
+
+You have two choices for wiring it in:
+
+- **Per-repo (recommended for "trying it on my own stuff")** — see §5.
+- **Globally for all GitHub HTTPS** — only if you want *all* your local git
+  operations against GitHub to go through the App. Probably not what you want,
+  because it'd hijack your personal repos too. Skip unless you're sure.
+
+---
+
+## 5. Per-repo git config (the override)
+
+Inside each repo where Claude operates:
+
+```bash
+cd /path/to/repo
+
+# Source the bot identity
+source ~/.config/claude-github-app/config
+
+# Override author/committer locally — does NOT touch ~/.gitconfig
+git config --local user.name  "$BOT_NAME"
+git config --local user.email "$BOT_EMAIL"
+
+# Wire the credential helper for this repo only
+# The leading `!` makes git treat the value as a shell command
+git config --local credential.helper "!$HOME/.config/claude-github-app/credential-helper.sh"
+
+# Make sure the remote is HTTPS, not SSH (SSH would bypass the helper)
+git remote set-url origin "https://github.com/<org>/<repo>.git"
+```
+
+Verify:
+
+```bash
+git config --local --get-regexp '^(user|credential|remote\.origin\.url)\.'
+```
+
+You should see the bot name/email, the helper, and an `https://` origin. Your
+global `user.name`/`user.email` are untouched and still apply to every other
+repo.
+
+### 5.1 One-shot setup script
+
+Drop this in `~/.config/claude-github-app/init-repo.sh` to apply the above to
+any repo:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+source ~/.config/claude-github-app/config
+
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "Not a git repo: $(pwd)" >&2
+  exit 1
+fi
+
+git config --local user.name  "$BOT_NAME"
+git config --local user.email "$BOT_EMAIL"
+git config --local credential.helper "!$HOME/.config/claude-github-app/credential-helper.sh"
+
+origin=$(git remote get-url origin 2>/dev/null || true)
+if [[ "$origin" == git@github.com:* ]]; then
+  https_url="https://github.com/${origin#git@github.com:}"
+  https_url="${https_url%.git}.git"
+  git remote set-url origin "$https_url"
+  echo "Switched origin to HTTPS: $https_url"
+fi
+
+echo "Repo configured for $BOT_NAME"
+```
+
+```bash
+chmod 700 ~/.config/claude-github-app/init-repo.sh
+```
+
+Then per repo: `cd repo && ~/.config/claude-github-app/init-repo.sh`.
+
+---
+
+## 6. Verify
+
+```bash
+cd /path/to/repo
+echo "test" >> README.md
+git add README.md
+git commit -m "test: claude-bot identity check"
+git push
+```
+
+On GitHub, open the commit. The author should show as `claude-bot[bot]` with the
+bot badge, linked to your App's bot account — not to you.
+
+If the author shows as a plain string with no badge, the email format is wrong.
+Double-check `<APP_ID>+<SLUG>[bot]@users.noreply.github.com` exactly.
+
+If push fails with 403, check:
+
+- The App is installed on this specific repo (§2).
+- The App has Contents: Read & write.
+- The remote is HTTPS, not SSH.
+- `~/.config/claude-github-app/get-token.sh` returns a token without error.
+
+---
+
+## 7. Telling Claude Code to use this
+
+Claude Code shells out to `git` and inherits the repo's `.git/config`. Once §5
+is done in a given repo, **`git` commits and pushes use the bot identity
+automatically** — no Claude-Code-specific configuration needed, because the
+credential helper (§4.3) mints a fresh token on every git operation.
+
+`gh` and direct REST/GraphQL calls are different: they don't go through the git
+credential helper, so they need their own fresh-token path. An `export
+GITHUB_TOKEN=$(get-token.sh)` is evaluated once and goes **stale after ~1 hour**
+— a long Claude session would start getting 401s mid-run. The fix is a wrapper
+that re-mints per call.
+
+### 7.1 `gh_wrapper` (ships in this repo → `~/.claude/bin/gh_wrapper`)
+
+This wrapper re-mints `GH_TOKEN` on every call (the cache script only hits the
+network when the token is within 5 min of expiry, so the common case is a cheap
+`jq`/`date` check). It **falls through to real `gh`** when the App isn't set up
+on this machine, so it is safe to ship to every machine via the `~/.claude`
+mirror.
+
+`bin/gh_wrapper` in this repo (→ `~/.claude/bin/gh_wrapper`):
+
+```bash
+#!/usr/bin/env bash
+# Run `gh` as the Claude GitHub App identity by minting a fresh
+# installation token per call. Falls through to plain `gh` when the
+# App identity isn't configured on this machine.
+set -euo pipefail
+TOKEN_SCRIPT="$HOME/.config/claude-github-app/get-token.sh"
+if [[ -x "$TOKEN_SCRIPT" ]]; then
+  GH_TOKEN="$("$TOKEN_SCRIPT")" exec gh "$@"
+else
+  exec gh "$@"
+fi
+```
+
+`GH_TOKEN` takes precedence over any stored `gh auth login` credentials, so no
+`gh auth logout` is needed. For direct `curl` against the API, mint inline
+rather than exporting a stale token:
+
+```bash
+curl -H "Authorization: Bearer $(~/.config/claude-github-app/get-token.sh)" ...
+```
+
+### 7.2 Enforcing the wrapper via the PreToolUse hook
+
+Naked `gh` is dangerous precisely because it fails *silently* into the wrong
+identity: if the App token isn't on the environment, `gh` uses your personal `gh
+auth login` credentials and the action is attributed to you, with no error. To
+prevent that in headless/subagent runs, the PreToolUse Bash hook
+(`hooks/auto-approve-compound-commands.sh`) denies a bare `gh` invocation **only
+when the current repo is App-configured** (local `user.email` matches
+`*[bot]@users.noreply.github.com`, per §3), with a `permissionDecisionReason`
+instructing the agent to use `gh_wrapper`. The agent's self-correction loop then
+retries correctly — the same mechanism the existing `cd <path> &&` / `git -C`
+denies use.
+
+Notes:
+
+- The deny fires on `PreToolUse` only (headless/subagent). Interactive
+  `PermissionRequest` sessions fall through to a normal prompt — the harness
+  can't take a deny verdict there. This is acceptable: the silent-wrong-identity
+  risk is highest in unattended subagent runs.
+- In non-App repos and on machines with no App configured, naked `gh` is correct
+  and is **not** denied.
+- This hook rule is **not yet implemented** — see the implementation checklist
+  in §10.
+
+---
+
+## 8. Secret boundary: what ships in the mirror vs. what stays local
+
+This repo is published to a **read-only public mirror** and pulled down as
+`~/.claude`. Be deliberate about which artifacts cross that boundary:
+
+| Artifact | Home | In the mirror? |
+|---|---|---|
+| `gh_wrapper` | `~/.claude/bin/gh_wrapper` (from `bin/` in this repo) | **Yes** — generic, no secrets |
+| Hook deny rule | `hooks/auto-approve-compound-commands.sh` | **Yes** — logic only |
+| `get-token.sh`, `credential-helper.sh`, `init-repo.sh` | `~/.config/claude-github-app/` | **No** — kept with the key by cohesion |
+| `config` (`APP_ID`, `INSTALLATION_ID`, `BOT_*`) | `~/.config/claude-github-app/config` | **No** — identifies your App/install |
+| `private-key.pem` | `~/.config/claude-github-app/private-key.pem` | **No — never.** Full App impersonation |
+| `.token-cache` | `~/.config/claude-github-app/.token-cache` | **No — never.** Holds a live ≤1h token |
+
+The three helper scripts contain no secret text, but they live in the
+un-mirrored `~/.config/claude-github-app/` **by cohesion**: keeping the key and
+the only code that reads it in one non-mirrored directory means no `.gitignore`
+slip can ever leak the PEM through the public repo. Set them up per-machine (a
+separate, non-mirrored bootstrap), not via this repo.
+
+`gh_wrapper` is the exception that *is* mirrored: it references the token script
+only by absolute path and contains nothing App-specific, so it's safe everywhere
+and degrades to plain `gh` when the App isn't present.
+
+---
+
+## 9. Rotation & hygiene
+
+- **Installation tokens** rotate themselves every hour; the cache script handles
+  this.
+- **Private key**: rotate from the App settings page periodically. Generate a
+  new key, replace the PEM, delete the old key from GitHub. Then `rm
+  ~/.config/claude-github-app/.token-cache` — rotating the PEM stops you minting
+  *new* tokens with the old key, but any token already in the cache stays valid
+  until its own ≤1h expiry. Deleting the cache forces an immediate fresh mint
+  with the new key.
+- **Permissions**: review the App's permissions when use cases change. Adding a
+  permission requires re-accepting the install on each repo.
+- **Audit**: org **Settings → Audit log**, filter `actor:claude-bot[bot]`, to
+  see everything the App has done.
+- **Revoke fast**: uninstall the App from a repo (or the org) to immediately cut
+  off all Claude access without touching your own credentials.
+
+---
+
+## 10. Implementation status / checklist
+
+This doc is the design. Building it requires (each is a separate, approval-gated
+change to global infra):
+
+- [ ] `bin/gh_wrapper` in this repo (→ `~/.claude/bin/gh_wrapper`).
+- [ ] Naked-`gh` deny rule in `hooks/auto-approve-compound-commands.sh`, gated
+  on the local bot `user.email` (§7.2). Regex must not false-trigger on
+  `gh_wrapper`, `github`, `git push`, etc.
+- [ ] Test cases in `hooks/test-deny-gate.sh`: DENY `gh pr create` in an App
+  repo; FALL_THROUGH/ALLOW for `gh_wrapper ...`, `git push`, non-App repos.
+- [ ] Per-machine bootstrap for `~/.config/claude-github-app/` (the un-mirrored
+  secrets + helper scripts).
+- [ ] A rule note (in `rules/`) telling agents to prefer `gh_wrapper` over `gh`
+  in App repos — proposed separately, per the "propose before editing global
+  ~/.claude" rule.
+
+---
+
+## 11. Multi-repo summary
+
+For each new repo Claude should work on:
+
+1. Install the App on the repo (org settings → App → Configure → add repo).
+2. `cd` into the repo.
+3. `~/.config/claude-github-app/init-repo.sh`.
+
+Done.
