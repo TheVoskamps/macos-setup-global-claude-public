@@ -5,7 +5,7 @@ description: Review a GitHub pull request for quality, security, and best practi
 
 # Review GitHub Pull Request
 
-Have the `pr-reviewer` agent review Pull Request $ARGUMENTS for cod se quality, security, and best practices.
+Have the `pr-reviewer` agent review Pull Request $ARGUMENTS for code quality, security, and best practices.
 
 ## Process
 

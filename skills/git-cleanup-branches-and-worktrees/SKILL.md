@@ -1,6 +1,6 @@
 ---
 name: git-cleanup-branches-and-worktrees
-description: Clean up merged issue branches and stale subagent worktrees.
+description: Clean up merged issue branches and remove stale subagent worktrees from `.claude/worktrees/`.
 ---
 
 Please clean up merged issue branches and their worktrees, plus the

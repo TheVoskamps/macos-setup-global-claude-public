@@ -1,6 +1,6 @@
 ---
 name: cc-review
-description: Load code review architecture and quality standards.
+description: "Apply code review standards: architecture patterns, required checks, cost optimization, and security expectations."
 ---
 
-Read @~/.claude/code-review-standards.md
+Read @~/.claude/rules/code-review-standards.md

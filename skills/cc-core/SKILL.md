@@ -1,6 +1,6 @@
 ---
 name: cc-core
-description: Load core working principles for Claude Code sessions.
+description: "Apply core working principles: explain-before-acting, repository boundaries, root-cause debugging, and markdown linting rules."
 ---
 
 Read @~/.claude/rules/core-principles.md

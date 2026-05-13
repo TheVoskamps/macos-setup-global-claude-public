@@ -1,11 +1,11 @@
 ---
 name: repo-config
-description: Interactively create or update the repo's .claude/rules/repo-config.md.
+description: Interactively create or update `.claude/rules/repo-config.md` by interviewing the user about VCS and issue tracker.
 ---
 
-You are running the `/repo:config` skill. Your job is to create or
+You are running the `/repo-config` skill. Your job is to create or
 update the **target repo's** `.claude/rules/repo-config.md` by
-interviewing the user. This file is read by `/issue:address` and the
+interviewing the user. This file is read by `/issue-address` and the
 `issue-developer`, `issue-fixer`, `doc-updater`, and `pr-reviewer`
 subagents at the start of every run, so it must be present and well
 formed before any of those flows will work.
@@ -26,7 +26,7 @@ git rev-parse --show-toplevel
 If the command fails (non-zero exit, or stderr indicates "not a git
 repository"), abort with a clear message:
 
-> `/repo:config` must be run from inside a git repository. The current
+> `/repo-config` must be run from inside a git repository. The current
 > directory is not a git working tree.
 
 Do not continue past this step on failure.
@@ -75,7 +75,7 @@ branches as options for the two branch fields.
 This step runs **only if the file existed** in Step 2. If the file
 did not exist, skip directly to Step 3.
 
-Many invocations of `/repo:config` are "just check what's
+Many invocations of `/repo-config` are "just check what's
 configured", not "I want to change something". Walking through the
 six interview questions only to land on "don't change anything" is
 friction. Gate the interview behind a single yes/no so the common
@@ -230,7 +230,7 @@ issue-branch-naming-prefix: <value>
 
 # Repo Config
 
-Read by `/issue:address` and by the `issue-developer`, `issue-fixer`,
+Read by `/issue-address` and by the `issue-developer`, `issue-fixer`,
 `doc-updater`, and `pr-reviewer` subagents at the start of every run.
 Do not assume values are already in context — re-read this file every
 time.
@@ -264,13 +264,13 @@ time.
 
 This section is **body-only**; it is not part of the six-key
 front-matter. Add it below the front-matter when the repo has an
-associated GitHub Project V2 board and you want the `/issue:*`
-commands (and `/issue:create`'s `--type` / `--importance` / `--status`
+associated GitHub Project V2 board and you want the `/issue-*`
+commands (and `/issue-create`'s `--type` / `--importance` / `--status`
 flags in particular) to resolve human-readable names to the project's
 field IDs and option IDs.
 
 Repos without a project board **omit this block entirely**. The
-`/issue:*` commands degrade gracefully: project-specific flags emit a
+`/issue-*` commands degrade gracefully: project-specific flags emit a
 one-line warning and skip, while non-project operations work
 normally.
 
@@ -311,42 +311,42 @@ Keys:
   (`PVTF_...` for number fields, `PVTSSF_...` for single-select).
   Find with `gh project field-list <project-number> --owner <org>`.
 - **fields.\*.default**: optional per-field default. Resolution order
-  for any `/issue:*` flag is: CLI flag > this repo-config default >
+  for any `/issue-*` flag is: CLI flag > this repo-config default >
   built-in default (Feature / 3 / Todo / current GitHub user).
 - **fields.status.options**: the human-readable status names mapped
-  to their option IDs. `/issue:set-status` does a case-insensitive
+  to their option IDs. `/issue-set-status` does a case-insensitive
   match against this map; canonical capitalization for display comes
   from the keys.
 - **issue-types**: the human-readable issue-type names mapped to
   their type IDs (`IT_...`). `default:` selects which type
-  `/issue:create` uses when `--type` is not passed.
+  `/issue-create` uses when `--type` is not passed.
 
-The `/repo:config` skill will be able to auto-discover and populate
+The `/repo-config` skill will be able to auto-discover and populate
 this block interactively in a future release; today the block is
 maintained by hand. See `skills/lib/issue.md` for full details on
 how the block is consumed.
 
 The Jira branch (`issues: Jira`) gets a parallel `jira:` block when
-Jira support is implemented; today, `/issue:*` commands abort under
-Jira with the same "not implemented" message `/issue:address` uses.
+Jira support is implemented; today, `/issue-*` commands abort under
+Jira with the same "not implemented" message `/issue-address` uses.
 
 ## Why this file exists
 
 Different repos use different VCS, issue trackers, and branching
-strategies. The `/issue:address` orchestrator and its subagents
+strategies. The `/issue-address` orchestrator and its subagents
 (`issue-developer`, `issue-fixer`, `doc-updater`, `pr-reviewer`)
 must not hardcode assumptions like "PR base is `main`", "use `gh`",
 or "issue link is `#NNN`". When a repo deviates, the orchestrator
 silently does the wrong thing. This file is the single source of
 truth that everything reads at the start of every run.
 
-If this file is missing, `/issue:address` aborts with an error
-pointing at this skill (`/repo:config`) to create one
+If this file is missing, `/issue-address` aborts with an error
+pointing at this skill (`/repo-config`) to create one
 interactively.
 ````
 
 The body is genericized: it does not reference any specific repo
-(such as `macos-setup`) by name, and it points at `/repo:config`
+(such as `macos-setup`) by name, and it points at `/repo-config`
 as the way to create the file when it's missing.
 
 ### Updating an existing file
@@ -385,7 +385,7 @@ After the file is written, report back:
 - The absolute path written.
 - The final resolved values for all six fields.
 - Whether this was a new file or an update.
-- Next step: the user can now run `/issue:address` and the
+- Next step: the user can now run `/issue-address` and the
   associated subagents in this repo.
 
 ---

@@ -41,7 +41,7 @@ If no issue numbers are given, ask for them before proceeding.
 Verify you are running in the primary clone, not in a worktree. If
 `git rev-parse --git-dir` returns anything other than `.git` (i.e.,
 an absolute path under `.git/worktrees/`), abort with an error
-explaining `/issue:address` must be run from the main repo root.
+explaining `/issue-address` must be run from the main repo root.
 Run this first — it's a hard abort regardless of repo-config, so it
 fails fast without doing config work that may be wasted.
 
@@ -72,8 +72,8 @@ named values:
 
 If the file is missing, abort with the message:
 
-> This repo has no `.claude/rules/repo-config.md`. /issue:address
-> requires it. See macos-setup for an example. Run /repo:config to
+> This repo has no `.claude/rules/repo-config.md`. /issue-address
+> requires it. See macos-setup for an example. Run /repo-config to
 > create one interactively.
 
 Throughout the rest of this template, references to `<source-branch>`,

@@ -31,7 +31,7 @@ the worktree root. Parse the YAML front-matter for:
 
 If the file is missing, abort with: "This repo has no
 `.claude/rules/repo-config.md`. issue-developer requires it. See
-macos-setup for an example. Run /repo:config to create one
+macos-setup for an example. Run /repo-config to create one
 interactively."
 
 In the rest of this document, `<source-branch>`, `<target-branch>`,

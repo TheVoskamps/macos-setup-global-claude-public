@@ -1,36 +1,36 @@
-# `/issue:*` shared reference (`skills/lib/issue.md`)
+# `/issue-*` shared reference (`skills/lib/issue.md`)
 
-This file is the single source of truth for the `/issue:*` command
+This file is the single source of truth for the `/issue-*` command
 namespace. It is **reference prose**, not an executable script: Claude
-reads it when running any `/issue:*` command and follows the patterns
-documented here. Individual command files (`/issue:create`,
-`/issue:view`, `/issue:set-status`, `/issue:set-importance`,
-`/issue:set-parent`, `/issue:set-child`, `/issue:set-blocked-by`,
-`/issue:set-blocks`, `/issue:sub-list`, `/issue:close`,
-`/issue:comment`, etc.) reference this doc rather than duplicating
+reads it when running any `/issue-*` command and follows the patterns
+documented here. Individual command files (`/issue-create`,
+`/issue-view`, `/issue-set-status`, `/issue-set-importance`,
+`/issue-set-parent`, `/issue-set-child`, `/issue-set-blocked-by`,
+`/issue-set-blocks`, `/issue-sub-list`, `/issue-close`,
+`/issue-comment`, etc.) reference this doc rather than duplicating
 GraphQL templates or default-resolution logic inline.
 
-`/issue:address` is **not** part of this namespace and does not read
+`/issue-address` is **not** part of this namespace and does not read
 this file — it is the higher-level multi-issue orchestrator and
 predates `skills/lib/issue.md`.
 
 ## Repo-config parsing
 
-Every `/issue:*` command runs from a repo working tree and starts by
+Every `/issue-*` command runs from a repo working tree and starts by
 reading `<repo-root>/.claude/rules/repo-config.md`. Find the repo root
 with `git rev-parse --show-toplevel`; do not assume the user's cwd is
 the root.
 
 If the file is missing, abort with:
 
-> This repo has no `.claude/rules/repo-config.md`. /issue:* commands
-> require it. Run `/repo:config` to create one interactively.
+> This repo has no `.claude/rules/repo-config.md`. /issue-* commands
+> require it. Run `/repo-config` to create one interactively.
 
 The file has two parts: a YAML front-matter block (six keys, defined
-by `/repo:config`) and a prose body. The new commands read **two
+by `/repo-config`) and a prose body. The new commands read **two
 sections**:
 
-1. **Front-matter** — same six keys `/issue:address` reads:
+1. **Front-matter** — same six keys `/issue-address` reads:
    `source-control`, `issues`, `issue-link-prefix`,
    `default-issue-source-branch`, `default-pr-target-branch`,
    `issue-branch-naming-prefix`. Used for tracker dispatch and
@@ -66,7 +66,7 @@ sections**:
    ```
 
    The IDs shown are illustrative. Per-repo IDs are populated by
-   `/repo:config` (which discovers them via `gh project list`,
+   `/repo-config` (which discovers them via `gh project list`,
    `gh project field-list`, and a GraphQL query for issue types) and
    are stable for the life of the project board.
 
@@ -82,25 +82,25 @@ Parse the indented YAML beneath it.
 Repos without a Project V2 board omit the `github-project:` block
 entirely. In that case:
 
-- Commands that only touch the issue itself (`/issue:create` without
-  `--type/--importance/--status`, `/issue:update`, `/issue:close`,
-  `/issue:comment`, `/issue:set-parent`, `/issue:set-child`,
-  `/issue:set-blocked-by`, `/issue:set-blocks`, `/issue:sub-list`,
-  `/issue:view`) work normally — they don't need project metadata.
+- Commands that only touch the issue itself (`/issue-create` without
+  `--type/--importance/--status`, `/issue-update`, `/issue-close`,
+  `/issue-comment`, `/issue-set-parent`, `/issue-set-child`,
+  `/issue-set-blocked-by`, `/issue-set-blocks`, `/issue-sub-list`,
+  `/issue-view`) work normally — they don't need project metadata.
 - Commands or flags that **require** project metadata
-  (`--type`, `--importance`, `--status`, `/issue:set-importance`,
-  `/issue:set-status`) emit a one-line warning and skip that step
+  (`--type`, `--importance`, `--status`, `/issue-set-importance`,
+  `/issue-set-status`) emit a one-line warning and skip that step
   rather than aborting the whole run. Example:
 
   > `warning: no github-project: block in repo-config.md;`
-  > `skipping --status. Run /repo:config to add it.`
+  > `skipping --status. Run /repo-config to add it.`
 
-- `/issue:view` prints whatever project fields it can read; if there's
+- `/issue-view` prints whatever project fields it can read; if there's
   no project, the project-fields section is omitted.
 
 ## Tracker dispatch
 
-Every command opens with the same `issues:` switch as `/issue:address`:
+Every command opens with the same `issues:` switch as `/issue-address`:
 
 - `issues == GitHub`: continue with the GitHub code path documented
   below.
@@ -109,7 +109,7 @@ Every command opens with the same `issues:` switch as `/issue:address`:
   > `issues: Jira` selected, but the Jira backend is not implemented.
   > See #103.
 
-  Mirror `/issue:address`'s abort message verbatim so the user sees a
+  Mirror `/issue-address`'s abort message verbatim so the user sees a
   consistent error across the namespace.
 
 ## Default-resolution order
@@ -167,7 +167,7 @@ to any other name-to-ID lookups added later.
 ## "One edge, two sides" pattern
 
 Several GitHub-issue relationships are **single edges in the data
-model** but are exposed by the `/issue:*` namespace as **two verbs**
+model** but are exposed by the `/issue-*` namespace as **two verbs**
 — one verb per direction — because users think about them from
 either end. The underlying API still has only one mutation per edge;
 the two verbs differ only in argument order.
@@ -273,7 +273,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 ```
 
 Most commands need only a subset of those fields. Trim the query to
-what the caller actually uses; the shape above is what `/issue:view`
+what the caller actually uses; the shape above is what `/issue-view`
 returns in one shot.
 
 ### Project-item lookup
@@ -298,10 +298,10 @@ mutation($projectId: ID!, $contentId: ID!) {
 }
 ```
 
-`/issue:create` calls this automatically when `github-project:` is
+`/issue-create` calls this automatically when `github-project:` is
 configured. Other commands either fail with the "not on project
 board" error (read-only paths) or call it on demand (write paths
-like `/issue:set-status`).
+like `/issue-set-status`).
 
 ### `addSubIssue` / `removeSubIssue`
 
@@ -450,10 +450,10 @@ Wrap variable parts in backticks.
 
 - **No `github-project:` block in repo-config**
 
-  > no `github-project:` block in `repo-config.md`; run `/repo:config` to add it
+  > no `github-project:` block in `repo-config.md`; run `/repo-config` to add it
 
   Emitted as an **abort** when the command **requires** project
-  metadata (e.g. `/issue:set-status` with no flags can't proceed) and
+  metadata (e.g. `/issue-set-status` with no flags can't proceed) and
   as a **warning-and-skip** when only a subset of flags need it (see
   "Graceful degradation" above).
 
@@ -462,7 +462,7 @@ Wrap variable parts in backticks.
   > `issues: Jira` selected, but the Jira backend is not implemented.
   > See #103.
 
-  Mirrors `/issue:address`'s abort word-for-word so users see one
+  Mirrors `/issue-address`'s abort word-for-word so users see one
   consistent error across the namespace.
 
 - **Issue not on the configured project board** (read paths only)
@@ -486,7 +486,7 @@ CLI.
 
 ## Conventions for command files
 
-When writing a new `/issue:*` command's `.md`:
+When writing a new `/issue-*` command's `.md`:
 
 - Open with one or two sentences describing the command's intent.
 - Link to this file: "See `skills/lib/issue.md` for shared GraphQL
