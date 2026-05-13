@@ -153,7 +153,7 @@ When credentials expire, you yourself refresh credentials and do not ask the use
 aws sso login --profile <profile-name>
 ```
 
-Do NOT try and run this with a ` --no-browser` flag as that will never work.
+Do NOT run this with a `--no-browser` flag. The Bash tool runs as a non-interactive background process, so it cannot accept the interactive device-code paste that `--no-browser` requires. The default `aws sso login` (no flag) works because it hands off to the OS to open the browser and then only polls for completion — no stdin or terminal interaction is needed.
 
 Example:
 
