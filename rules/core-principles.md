@@ -42,7 +42,7 @@
 ### 1.5. PROPOSE BEFORE EDITING GLOBAL ~/.claude
 
 **CRITICAL**: Never edit anything under `~/.claude/` — especially
-`~/.claude/agents/`, `~/.claude/commands/`, `~/.claude/rules/`,
+`~/.claude/agents/`, `~/.claude/skills/`, `~/.claude/rules/`,
 `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, `~/.claude/hooks/` —
 without **first proposing the change in the conversation and getting
 explicit confirmation**.
