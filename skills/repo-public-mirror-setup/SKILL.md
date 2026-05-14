@@ -302,6 +302,15 @@ jobs:
           chmod 700 ~/.ssh
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_mirror
           chmod 600 ~/.ssh/id_mirror
+          # NOTE: ssh-keyscan is TOFU (Trust-On-First-Use) — the very
+          # first run trusts whatever key the GitHub IP returns. The
+          # GitHub-hosted runner is reaching GitHub from inside the
+          # same provider's network on every run, so the practical
+          # attack surface is narrow, but pinning is stronger. If
+          # this workflow is ever ported off GitHub-hosted runners,
+          # replace this line with pinned host keys fetched from
+          # https://api.github.com/meta (the `ssh_keys` field, with
+          # the connection itself trusted via TLS PKI).
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<EOF
           Host github-mirror
@@ -331,15 +340,31 @@ jobs:
         run: |
           set -euo pipefail
           cd "$FILTERED"
+          # Build the new file content in $RUNNER_TEMP (the bare clone
+          # has no working tree to write into), then insert it as a
+          # blob and synthesize a new tree that adds the CONTRIBUTORS
+          # entry on top of HEAD's existing tree.
           {
             cat "$CONF/CONTRIBUTORS.template"
             echo
             git shortlog -sne --all
-          } > CONTRIBUTORS
-          git -c user.name='public-mirror' -c user.email="$BOT_EMAIL" \
-            commit-tree HEAD^{tree} -p HEAD \
-            -m 'Regenerate CONTRIBUTORS' > /tmp/new-head
-          git update-ref refs/heads/main "$(cat /tmp/new-head)"
+          } > "${RUNNER_TEMP}/CONTRIBUTORS"
+          BLOB=$(git hash-object -w "${RUNNER_TEMP}/CONTRIBUTORS")
+          # Reuse HEAD's tree as the base, then overlay the new blob
+          # via a temporary index. read-tree loads HEAD's tree into
+          # the index; update-index --add registers the new blob;
+          # write-tree emits the resulting tree SHA.
+          export GIT_INDEX_FILE="${RUNNER_TEMP}/idx"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree HEAD
+          git update-index --add --cacheinfo "100644,$BLOB,CONTRIBUTORS"
+          NEW_TREE=$(git write-tree)
+          unset GIT_INDEX_FILE
+          NEW_HEAD=$(git -c user.name='public-mirror' \
+                         -c user.email="$BOT_EMAIL" \
+                       commit-tree "$NEW_TREE" -p HEAD \
+                       -m 'Regenerate CONTRIBUTORS')
+          git update-ref refs/heads/main "$NEW_HEAD"
 
       - name: Force-push to mirror
         run: |
@@ -351,10 +376,18 @@ jobs:
 
 Notes on the template:
 
-- The `Regenerate CONTRIBUTORS` step uses `commit-tree` rather than
-  a normal `commit` so the file is added as a single synthetic
-  commit on top of the filtered history without dirtying any of
-  the rewritten commits' SHAs upstream of it.
+- The `Regenerate CONTRIBUTORS` step works against a **bare clone**
+  (no working tree), so it cannot just `git add CONTRIBUTORS &&
+  git commit`. Instead it inserts the new file content as a blob
+  with `git hash-object -w`, overlays that blob onto HEAD's tree
+  via a temporary index (`GIT_INDEX_FILE` pointed at
+  `${RUNNER_TEMP}/idx`, `read-tree` + `update-index --cacheinfo` +
+  `write-tree`), and then uses `commit-tree` to wrap the new tree
+  in a single synthetic commit on top of the filtered history.
+  The synthetic commit doesn't dirty any of the rewritten commits'
+  SHAs upstream of it.
+- All temporary files live under `${RUNNER_TEMP}` (the
+  GitHub-recommended runner temp dir), not `/tmp/`.
 - Replace `<short>` in the `user.email` and `<owner>/<short>-public`
   in the remote URL with real values when writing the file.
 - `concurrency: public-mirror` prevents overlapping force-pushes if
@@ -388,14 +421,17 @@ Print the resulting tree so the user can see exactly what would
 land in the mirror.
 
 ```bash
-mkdir -p .claude/tmp/repo-public-mirror-setup
-WORK=.claude/tmp/repo-public-mirror-setup/dryrun
+# Capture the absolute repo root BEFORE cd-ing, so the filter
+# config paths resolve correctly regardless of cwd depth.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+mkdir -p "$REPO_ROOT/.claude/tmp/repo-public-mirror-setup"
+WORK="$REPO_ROOT/.claude/tmp/repo-public-mirror-setup/dryrun"
 rm -rf "$WORK"
-git clone --bare . "$WORK"
+git clone --bare "$REPO_ROOT" "$WORK"
 ( cd "$WORK" \
   && git filter-repo \
-       --paths-from-file ../../../.github/public-mirror/paths.allowlist \
-       --mailmap ../../../.github/public-mirror/mailmap \
+       --paths-from-file "$REPO_ROOT/.github/public-mirror/paths.allowlist" \
+       --mailmap "$REPO_ROOT/.github/public-mirror/mailmap" \
   && git ls-tree -r --name-only HEAD | sort )
 ```
 
@@ -498,13 +534,30 @@ private repository instead. The upstream maintainers can grant
 access if you need it.
 ```
 
-Push sequence:
+Push sequence (run from the source repo root):
 
 ```bash
-cd .claude/tmp/repo-public-mirror-setup/bootstrap
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+BOOT="$REPO_ROOT/.claude/tmp/repo-public-mirror-setup/bootstrap"
+mkdir -p "$BOOT"
+cd "$BOOT"
 git init -b main
-# write the files above, copy LICENSE/PATENTS/PRIOR_ART.md/
-# CODEOWNERS/.gitignore from the source repo
+```
+
+Then populate the bootstrap directory as explicit, separate
+actions (do not bundle into a comment):
+
+1. Write `README.md` with the bootstrap content shown above.
+2. Write `pull_request_template.md` with the bootstrap content
+   shown above.
+3. For each of `LICENSE`, `PATENTS`, `PRIOR_ART.md`, `CODEOWNERS`,
+   `.gitignore`: if the file exists at `$REPO_ROOT/<name>`, copy
+   it to `$BOOT/<name>`. Skip silently if the source file does
+   not exist.
+
+Then commit and push:
+
+```bash
 git add .
 git -c user.name='public-mirror-setup' \
     -c user.email='public-mirror-setup@<short>.local' \
@@ -533,9 +586,15 @@ explicit and makes this step self-contained if re-run.
 
 ## Step 14: Apply branch protection on the mirror's `main`
 
-The protection allows pushes only from the workflow identity (via
-the deploy key uploaded in Step 15). Use `gh api` because
-`gh repo edit` does not cover branch protection rules.
+In practice, the deploy key uploaded in Step 15 is the only
+**non-admin** identity with write access to an otherwise-empty
+repo, so day-to-day writes come exclusively from the workflow.
+Repo admins (and org admins) still retain push access regardless
+of this protection — branch protection on GitHub does not lock
+admins out unless `enforce_admins` is set, and that flag is
+intentionally left off here so a human can intervene if the
+workflow gets stuck. Use `gh api` because `gh repo edit` does not
+cover branch protection rules.
 
 ```bash
 gh api \
@@ -561,13 +620,15 @@ JSON
 Notes:
 
 - `allow_force_pushes: true` is intentional — the workflow
-  force-pushes filtered history on every run. The protection still
-  prevents direct human pushes via the absent push permission for
-  any identity other than the deploy key.
+  force-pushes filtered history on every run.
 - `restrictions: null` means GitHub uses repository-level push
-  permissions. Because the deploy key is the only identity with
-  write access (the repo is otherwise empty of collaborators), the
-  practical effect is workflow-only write.
+  permissions. Because the deploy key is the only **non-admin**
+  identity with write access (the repo is otherwise empty of
+  collaborators), the practical effect is that day-to-day writes
+  come from the workflow. Repo and org admins retain push access;
+  if you need to lock them out, you'd set `enforce_admins: true`
+  — left off here so a human can intervene if the workflow gets
+  stuck.
 - If the target org enforces stricter protection rules via
   rulesets, this PUT may be rejected. In that case surface the
   error to the user and stop — the user resolves the conflict at
@@ -593,8 +654,11 @@ expand the contents into the conversation or into shell argv.
 ```bash
 gh secret set PUBLIC_MIRROR_DEPLOY_KEY \
   --repo <owner>/<short> \
-  < <expanded-path>
+  < "<expanded-path>"
 ```
+
+The redirect target is quoted so paths containing spaces (e.g.
+`/Users/Alice Smith/.ssh/repo-mirror`) work correctly.
 
 The secret name `PUBLIC_MIRROR_DEPLOY_KEY` matches the
 `${{ secrets.PUBLIC_MIRROR_DEPLOY_KEY }}` reference in the
@@ -691,10 +755,14 @@ the plumbing steps that are safe once the tree has been approved.
 - **Never proceed if `git-filter-repo` is missing.** Step 3 aborts
   with the install command. Do not attempt to install it yourself
   — the user runs `brew install git-filter-repo`.
-- **All scratch work goes under `.claude/tmp/...`** in the source
-  repo, never `/tmp/`, never the user's home directory, never a
-  path outside the repo. Clean up on success; leave in place on
-  failure.
+- **All scratch work done by the skill on the user's machine goes
+  under `.claude/tmp/...`** in the source repo, never `/tmp/`,
+  never the user's home directory, never a path outside the repo.
+  Clean up on success; leave in place on failure. (This constraint
+  applies to the **skill**. The generated workflow runs on
+  GitHub-hosted Actions runners, a separate execution context with
+  its own conventions — there it uses `${RUNNER_TEMP}`, the
+  GitHub-recommended runner temp dir, not the repo tree.)
 - **Use `gh repo create --disable-issues --disable-wiki` at
   creation time**, then a follow-up `gh repo edit
   --enable-discussions=false` (Step 13) because `gh repo create`
