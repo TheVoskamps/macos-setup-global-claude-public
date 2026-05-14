@@ -1,6 +1,6 @@
 ---
 name: repo-config
-description: Interactively create or update `.claude/rules/repo-config.md` by interviewing the user about VCS and issue tracker.
+description: Interactively create or update `.claude/rules/repo-config.md` by interviewing the user about VCS, issue tracker, and (for GitHub repos) the associated Project V2 board.
 ---
 
 You are running the `/repo-config` skill. Your job is to create or
@@ -51,8 +51,9 @@ target repo (relative to the repo root from Step 1).
   (the block delimited by `---` at the top) into the six known keys
   listed in Step 3. Any value found becomes the **recommended
   default** for that field's question. Preserve the body of the
-  file (everything after the closing `---`) verbatim — Step 5 only
-  rewrites the front-matter when updating.
+  file (everything after the closing `---`) verbatim — Steps 5 and
+  5b are the only places that may rewrite parts of the file, and
+  each rewrites only its own region.
 - **If it does not exist**: use these built-in defaults:
   - `source-control`: `GitHub`
   - `issues`: `GitHub`
@@ -69,6 +70,51 @@ defaults or stop. Do not attempt to silently "fix" the file.
 Also, before Step 3, gather the local branch list with
 `git branch --format='%(refname:short)'` so you can offer real
 branches as options for the two branch fields.
+
+### Detect existing `github-project:` block
+
+After parsing the front-matter, scan the body (everything after the
+closing front-matter `---`) for a line that starts with
+`github-project:` at column 0. The block runs until the next column-0
+non-blank line (a new top-level body key, a Markdown heading like
+`# ...` or `## ...`, etc.) or EOF. This matches the scan rule in
+`skills/lib/issue.md` so the wizard and the consumers agree on
+boundaries.
+
+If a block is found:
+
+- Capture its **exact literal bytes** — opening `github-project:`
+  line through the last line of the indented block, inclusive, with
+  original line endings and trailing whitespace. Step 5b uses this
+  verbatim as `old_string` if the block is changing.
+- Also capture any **immediately preceding comment lines** that
+  document why the block is present or absent (lines starting with
+  `<!--` ... `-->` or `#` that sit directly above the block with no
+  blank line in between). On a rewrite, treat these as part of the
+  block's region so they don't get orphaned.
+- Parse the indented YAML beneath the `github-project:` key into the
+  schema shown in `skills/lib/issue.md` (project-id, fields,
+  issue-types). Values found here become the **recommended defaults**
+  for the corresponding github-project questions in Step 3b.
+
+If a block is **not** found, also look for a "skip marker" — an HTML
+comment of the exact form:
+
+```text
+<!-- github-project: intentionally omitted; <reason>. -->
+```
+
+If present, treat it as "the user previously chose to skip"; Step 3b
+will recommend `Skip` and surface the prior reason. Capture its
+literal bytes too.
+
+If neither a block nor a skip marker is present, the github-project
+state is "absent" — Step 3b will offer to populate it.
+
+Malformed `github-project:` YAML (unparseable, unknown keys, missing
+required sub-keys) is surfaced the same way as malformed front-matter:
+tell the user and ask whether to discard the block and start over from
+auto-discovery, or stop. Do not silently rewrite a broken block.
 
 ## Step 2.5: Confirm intent to edit (existing file only)
 
@@ -152,6 +198,255 @@ The six fields, in order:
 Do not validate that the chosen branches actually exist on the
 remote; that is out of scope for this skill.
 
+## Step 3b: GitHub Project interview (conditional)
+
+This step runs **only when the just-chosen `issues` value is `GitHub`**.
+If `issues` is `Jira` (or anything other than `GitHub`), skip this
+step entirely and proceed to Step 4. Do not prompt for any
+project-related values under Jira; the `github-project:` block is a
+GitHub-only concept and the Jira branch will eventually get a parallel
+`jira:` block.
+
+The purpose of this step is to populate (or update, or intentionally
+omit) the `github-project:` body block defined in `skills/lib/issue.md`.
+The block carries project node IDs, status option IDs, and issue type
+IDs so the `/issue-*` commands can translate human-readable names
+into the GraphQL IDs the GitHub API requires.
+
+### 3b.1 — Decide whether to populate
+
+Use `AskUserQuestion` to ask the user how to handle the
+`github-project:` block. The set of options and the recommended one
+depend on the state captured in Step 2:
+
+- **Block present** — offer `Keep`, `Update`, `Remove`. Recommend
+  `Keep`.
+- **Skip marker present (no block)** — offer `Skip again`,
+  `Populate`. Recommend `Skip again`.
+- **Neither block nor skip marker (absent)** — offer `Populate`,
+  `Skip`. Recommend `Populate`.
+
+Option meanings:
+
+- **Keep**: leave the existing block (and any preceding comments)
+  byte-for-byte. Set the github-project diff to "no change" and exit
+  this step.
+- **Update**: re-run auto-discovery (Steps 3b.2 - 3b.5) using the
+  existing block's values as recommended defaults where applicable.
+  Replace the block on write.
+- **Remove**: delete the block on write and replace it with a skip
+  marker (see 3b.6). Ask for a short free-form reason via "Other".
+- **Populate**: run auto-discovery for the first time. Build the block
+  from scratch.
+- **Skip** / **Skip again**: do not add a block. Write (or keep) the
+  skip marker with a short reason. Recommended reason for "Skip
+  again" is whatever the existing marker said; for first-time "Skip",
+  ask via "Other".
+
+On `Keep` or `Skip again` with no reason change, set the github-project
+diff to "no change" and proceed to Step 4. Otherwise continue with
+3b.2 onward.
+
+### 3b.2 — Pick the owner and project
+
+Auto-discover the repo's owner from the local remote:
+
+```bash
+git remote get-url origin
+```
+
+Parse the `owner/repo` from the URL (both SSH and HTTPS forms; strip
+any trailing `.git`). The owner is typically a GitHub organization but
+may be a user; both work as `--owner` arguments to `gh project list`.
+
+List accessible projects for that owner:
+
+```bash
+gh project list --owner <owner> --format json
+```
+
+Parse the JSON. The shape is `{ projects: [ { number, title, id,
+... } ] }`. Each project's `id` is the ProjectV2 node ID (`PVT_...`),
+which is the literal value that goes into `project-id`.
+
+Show the user the discovered projects with their numbers and titles,
+plus options:
+
+- One option per discovered project (label: `<number>: <title>`).
+- `Other` to type a project number by hand (useful when the project
+  belongs to an upstream org `gh project list` can't see, or when the
+  list is truncated by `--limit`).
+- `Skip` to abandon the github-project block. On `Skip`, jump to
+  3b.6 to record the skip marker.
+
+Common failure modes to handle gracefully:
+
+- `gh project list` exits non-zero or returns an empty list. Surface
+  the error/empty result and offer `Other` (manual entry) or `Skip`.
+- The user picks `Other` and enters a project number. Resolve its
+  node ID by running `gh project view <number> --owner <owner>
+  --format json` and reading `.id` (also `.title` for the summary).
+
+If the project node ID does not start with `PVT_`, treat the response
+as invalid and let the user retry or skip.
+
+Record:
+
+- `project-id` — the `PVT_...` node ID.
+- The numeric project number and title (for the summary in Step 6;
+  these are not written to the file).
+
+### 3b.3 — Discover fields (status and importance)
+
+For the chosen project, enumerate fields:
+
+```bash
+gh project field-list <project-number> --owner <owner> --format json
+```
+
+The JSON shape is `{ fields: [ { id, name, type, options? } ] }`,
+where `type` is one of `ProjectV2Field`, `ProjectV2SingleSelectField`,
+`ProjectV2IterationField`, and `options` is present only on
+single-select fields as an array of `{ id, name }`.
+
+**Status field** (required if the user chose `Populate` or `Update`):
+
+- Find the single-select field named `Status` (case-insensitive). If
+  exactly one match is found, use it. If multiple single-select fields
+  could plausibly be "status" (e.g. `Status`, `State`), present them as
+  options and let the user pick. If none are found, present the
+  available single-select fields plus `Other` (manual entry of field
+  ID) and `Skip status field`.
+- Capture `id` (the `PVTSSF_...` field node ID) and the full list of
+  `options` (each as `{ id, name }`). The option IDs are short hex
+  strings, not `PVT_*` prefixed node IDs — that is correct for
+  single-select option IDs in ProjectV2.
+- Ask the user which option should be the **default status** for new
+  issues. Recommend, in order: the existing block's
+  `fields.status.default` (if it matches one of the current options
+  case-insensitively), then `Todo` (if present), then the first option
+  in the list. Always include an `Other` to free-type one of the
+  enumerated names.
+
+**Importance field** (optional):
+
+- Find a number field named `Importance` (case-insensitive). A number
+  field has `type == "ProjectV2Field"` and no `options`; the JSON
+  output does not always carry a discriminator beyond `type`, so
+  identify number-vs-text by checking the schema if needed (number
+  fields in projects are typed; if the discovery output is ambiguous,
+  ask the user to confirm by entering a sample value or just skip).
+- If exactly one match is found, propose it. Otherwise present all
+  number fields (or all non-single-select fields if the type isn't
+  exposed) plus `None / skip importance`.
+- If a field is selected, capture its `id` (`PVTF_...`) and ask the
+  user for a **default importance value** (integer or float). Recommend
+  the existing block's `fields.importance.default` if any, else `3`.
+
+If the user chooses to skip importance, omit the
+`fields.importance` sub-block; the rest of the github-project block
+is still valid.
+
+### 3b.4 — Discover issue types
+
+GitHub Issue Types are an org-level (and now repo-scoped) enum. There
+is no `gh issue-type` command yet; query via GraphQL:
+
+```bash
+gh api graphql -F owner=<owner> -F repo=<repo> -f query='
+query($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    issueTypes(first: 50) {
+      nodes { id name isEnabled }
+    }
+  }
+}'
+```
+
+Filter to `isEnabled: true`. Each enabled type contributes
+`<Name>: <id>` to the `issue-types:` map (preserve the capitalization
+GitHub returns). Skip types that are disabled.
+
+If the query returns an empty list or the field is `null` (older repos
+without issue types enabled), ask the user whether to:
+
+- `Skip issue-types` — omit the `issue-types:` sub-block entirely.
+- `Other` — manually enter `Name: IT_...` pairs.
+
+Ask the user which type should be the **default**. Recommend, in
+order: the existing block's `issue-types.default` (if still valid),
+then `Feature` (if present), then the first type in the list. Include
+`Other` for free-type.
+
+### 3b.5 — Assemble the proposed block
+
+From the captured values, render the YAML block that will be written
+to the file. Use this exact indentation and key order (matching the
+schema in `skills/lib/issue.md`):
+
+```yaml
+github-project:
+  project-id: <project-id>
+  fields:
+    importance:
+      id: <field-id>
+      type: number
+      default: <number>
+    status:
+      id: <field-id>
+      type: single-select
+      default: <option-name>
+      options:
+        <Option Name>: <option-id>
+        ...
+  issue-types:
+    default: <Type Name>
+    <Type Name>: <type-id>
+    ...
+```
+
+Conditional rendering rules:
+
+- Omit `fields.importance` entirely if importance was skipped. If
+  `fields` ends up empty after both importance and status are skipped,
+  omit the `fields:` key entirely.
+- Omit `issue-types` entirely if issue types were skipped or the repo
+  has none enabled.
+- Preserve the case-sensitive option and type names from the GitHub
+  API verbatim — they are the canonical keys the `/issue-*` commands
+  match against.
+- If any option or type name contains consecutive spaces, or starts
+  with a YAML-special character — any of these:
+
+  ```text
+  ? : - & * ! [ { , > | % @ ` " '
+  ```
+
+  — quote the key with double quotes to keep the YAML well-formed.
+  The common case (single-word or space-separated names like `In
+  Progress`) is fine unquoted, matching the example in
+  `skills/lib/issue.md`.
+
+### 3b.6 — Skip marker (when the user chose to skip)
+
+When the user chose `Skip`, `Skip again`, or `Remove`, do not write a
+`github-project:` block. Instead, plan to write a single-line HTML
+comment of the exact form:
+
+```text
+<!-- github-project: intentionally omitted; <reason>. -->
+```
+
+Place the comment where the block would have gone (see Step 5b for the
+insertion rule). Use the reason captured from the user (free-text
+trimmed to a single line, period appended if missing). On `Skip again`
+with no reason change, keep the existing marker verbatim.
+
+The skip marker is what makes `/repo-config` re-runs idempotent for
+repos that legitimately have no project board: Step 2 detects it,
+3b.1 recommends `Skip again`, and the user is not re-asked to
+auto-discover something that doesn't exist.
+
 ## Step 4: Show the proposed file and wait for approval
 
 Render the resolved YAML front-matter to the user **before** writing
@@ -187,10 +482,36 @@ are otherwise interpreted as a YAML comment.
     default-pr-target-branch: main -> release
   ```
 
-  List only fields whose value actually changed. If no front-matter
-  field is changing, say "No front-matter changes; nothing to
-  write." and skip Step 5. The body is preserved verbatim and is
-  not part of the diff.
+  List only fields whose value actually changed.
+
+### GitHub Project block diff
+
+If Step 3b ran (i.e. `issues == GitHub`), also show what is happening
+to the `github-project:` body region. Pick the wording that matches
+the planned outcome:
+
+- **No change** (the user chose `Keep`, or chose `Skip again` and
+  kept the existing reason): "No `github-project:` change."
+- **Add** (no prior block, user populated): show the full proposed
+  YAML block exactly as it will appear in the file (the rendered
+  block from Step 3b.5), prefixed with the line "Add
+  `github-project:` block:".
+- **Update** (prior block, user re-discovered): show a unified diff
+  of the prior block (literal bytes from Step 2) vs. the proposed
+  block, prefixed with "Update `github-project:` block:". For large
+  option/type maps, a per-line diff is fine; do not try to be clever.
+- **Remove** (prior block, user chose `Remove`): show the line
+  "Remove `github-project:` block; replace with skip marker:" and
+  print the planned skip-marker comment.
+- **Skip first time** (no prior block, user chose `Skip`): show the
+  line "Add skip marker:" and print the planned comment.
+
+If nothing changes at all — neither front-matter nor body — say "No
+front-matter changes; no `github-project:` change; nothing to
+write." and skip Steps 5 and 5b.
+
+The rest of the body (the prose after the optional `github-project:`
+region) is preserved verbatim and is not part of the diff.
 
 Then ask explicitly for approval, e.g.:
 
@@ -198,8 +519,8 @@ Then ask explicitly for approval, e.g.:
 > proceed, or tell me what to change)
 
 Wait for explicit approval (`y`, `yes`, `go`, `do it`, etc.) before
-moving to Step 5. If the user asks for changes, loop back to Step 3
-or Step 4 as appropriate.
+moving to Steps 5 and 5b. If the user asks for changes, loop back to
+Step 3, Step 3b, or Step 4 as appropriate.
 
 ## Step 5: Write the file
 
@@ -215,19 +536,23 @@ when neither directory exists is safe. If you are using a different
 tool path that does not auto-create parents, run
 `mkdir -p .claude/rules` first.
 
-Write `.claude/rules/repo-config.md` with the resolved front-matter
-followed by this exact body:
+Compose the file in this order:
+
+1. The resolved YAML front-matter (the canonical six-key block from
+   Step 4).
+2. A blank line.
+3. **If Step 3b produced a resolved `github-project:` block**: that
+   block exactly as rendered in 3b.5, followed by a blank line. **If
+   Step 3b produced a skip marker**: the single-line HTML comment from
+   3b.6, followed by a blank line. **If Step 3b ran but the user chose
+   to do nothing** or **Step 3b did not run** (Jira): no extra content
+   here.
+4. The canonical body template (below), starting with `# Repo Config`.
+
+The canonical body template (body only — front-matter and any
+github-project content are composed in steps 1-3 above):
 
 ````markdown
----
-source-control: <value>
-issues: <value>
-issue-link-prefix: "<value>"
-default-issue-source-branch: <value>
-default-pr-target-branch: <value>
-issue-branch-naming-prefix: <value>
----
-
 # Repo Config
 
 Read by `/issue-address` and by the `issue-developer`, `issue-fixer`,
@@ -321,10 +646,14 @@ Keys:
   their type IDs (`IT_...`). `default:` selects which type
   `/issue-create` uses when `--type` is not passed.
 
-The `/repo-config` skill will be able to auto-discover and populate
-this block interactively in a future release; today the block is
-maintained by hand. See `skills/lib/issue.md` for full details on
-how the block is consumed.
+The `/repo-config` skill auto-discovers and populates this block
+interactively: pick the project from `gh project list`, then the
+wizard reads the Status field's options, looks for an `Importance`
+number field by convention, and queries the repo's issue types via
+GraphQL. Hand-editing is still supported — the wizard preserves
+existing values as recommended defaults and rewrites the block
+byte-faithfully against the prior literal bytes. See
+`skills/lib/issue.md` for full details on how the block is consumed.
 
 The Jira branch (`issues: Jira`) gets a parallel `jira:` block when
 Jira support is implemented; today, `/issue-*` commands abort under
@@ -351,8 +680,18 @@ as the way to create the file when it's missing.
 
 ### Updating an existing file
 
-If the file already exists, **only the YAML front-matter changes**.
-Preserve the body (everything after the closing `---`) byte-for-byte.
+When the file already exists there are up to two independent regions
+that can change:
+
+1. The **YAML front-matter** (the six keys) — handled in this
+   sub-step.
+2. The **`github-project:` body region** (the block and/or a skip
+   marker) — handled in Step 5b below.
+
+The prose body outside the `github-project:` region is always
+preserved byte-for-byte. Do not edit it.
+
+#### 5.a Front-matter
 
 Use the `Edit` tool to replace the front-matter block.
 
@@ -378,12 +717,99 @@ applies on both sides of the closing `---`.
 (canonical key order, canonical quoting, no comments, no extra blank
 lines). Do not touch the body.
 
+If no front-matter field actually changed, skip this sub-step (no
+`Edit` call); the github-project region may still need updating.
+
+## Step 5b: Update the `github-project:` body region (existing file)
+
+This step runs only when the file already existed **and** Step 3b
+produced a non-"no change" outcome. New-file writes do not use this
+step (Step 5's compose order handles the block inline).
+
+Use the `Edit` tool exactly once per body change, following the same
+byte-faithful discipline as Step 5.a's front-matter update.
+
+### Case A: prior block existed; user chose `Update`
+
+- `old_string`: the **literal bytes of the prior block** captured in
+  Step 2, including any preceding skip-marker-style comments you
+  bundled with the block in Step 2's detect rule. Do not reconstruct
+  from parsed values.
+- `new_string`: the rendered block from Step 3b.5, with no extra
+  surrounding blank lines beyond what the prior bytes had (so the
+  surrounding body keeps its original spacing).
+
+### Case B: prior block existed; user chose `Remove`
+
+- `old_string`: the **literal bytes of the prior block** (same as
+  Case A).
+- `new_string`: the single-line skip-marker comment from Step 3b.6.
+
+### Case C: prior block existed; user chose `Keep`
+
+No `Edit` call. The block stays exactly as it was. (This case is
+filtered out by Step 4's "no change" branch and shouldn't reach
+Step 5b at all; documented here for completeness.)
+
+### Case D: prior skip marker existed; user chose `Populate`
+
+- `old_string`: the **literal bytes of the prior skip marker**
+  captured in Step 2.
+- `new_string`: the rendered block from Step 3b.5.
+
+### Case E: prior skip marker existed; user chose `Skip again` with a new reason
+
+- `old_string`: prior skip marker bytes.
+- `new_string`: the updated skip marker line.
+
+### Case F: no prior block and no prior skip marker; user chose `Populate` or `Skip`
+
+There is no anchor to use as `old_string` because nothing about the
+block currently exists in the file. Pick an insertion anchor and
+prepend the new region to it. The anchor is the first non-blank
+line in the body — for the canonical body template this is the
+`# Repo Config` heading.
+
+- `old_string`: the anchor line, captured verbatim from the file
+  (e.g. `# Repo Config\n`).
+- `new_string`: the new block (or skip marker), followed by a single
+  blank line, followed by the same anchor line.
+
+If the anchor is not unique within the file (unlikely for
+`# Repo Config` but worth checking), expand `old_string` to include
+a few lines after the anchor to make it unique. This is the same
+disambiguation discipline `Edit` expects in general.
+
+### Verification
+
+After each `Edit` call, re-read the file with `Read` and confirm:
+
+- The block appears at column 0 and parses as YAML.
+- The block terminates at a column-0 non-blank line (heading or
+  next top-level key) as `skills/lib/issue.md` expects.
+- The surrounding body bytes are unchanged outside the edited
+  region. (Compare against the bytes you captured in Step 2.)
+
+If verification fails, surface the diff to the user and stop — do
+not attempt a corrective second edit. The user should re-run
+`/repo-config` after manually resolving the inconsistency.
+
 ## Step 6: Summarize
 
 After the file is written, report back:
 
 - The absolute path written.
-- The final resolved values for all six fields.
+- The final resolved values for all six front-matter fields.
+- The `github-project:` outcome — one of:
+  - `populated` (project title and number, count of status options,
+    count of issue types).
+  - `updated` (same details as `populated`, plus a one-line summary
+    of what changed: e.g. "default status Todo -> In Progress; added
+    issue type Goal").
+  - `kept unchanged` (existing block left as-is).
+  - `removed` (block deleted; skip marker written with reason).
+  - `skipped` (no block present; skip marker written with reason).
+  - `not applicable` (`issues: Jira`, so the block doesn't apply).
 - Whether this was a new file or an update.
 - Next step: the user can now run `/issue-address` and the
   associated subagents in this repo.
@@ -403,3 +829,14 @@ After the file is written, report back:
 - **Do not migrate other config schemas.** If the existing file
   uses unknown keys, surface the problem and stop; do not silently
   drop or rename keys.
+- **Do not prompt for `github-project:` under Jira.** Step 3b runs
+  only when the just-chosen `issues` value is `GitHub`. Under
+  `issues: Jira`, no project block is added, removed, or asked
+  about; that branch will eventually get a parallel `jira:` block
+  when Jira support lands.
+- **Never invent project IDs, field IDs, option IDs, or issue type
+  IDs.** All IDs written to the `github-project:` block must come
+  from a live `gh` query in Step 3b (or, with explicit user override
+  via `Other`, from values the user typed in). Do not copy IDs from
+  the schema example in this file or from `skills/lib/issue.md` —
+  those are illustrative placeholders.
