@@ -76,32 +76,36 @@ block (those are omitted entirely).
 #<N> <title>                                       (<state>)
 <url>
 
-Labels:     <comma-separated names, or (none)>
-Assignees:  <comma-separated logins, or (none)>
-Type:       <issue-type name, or (none)>
-Importance: <number, or (none)>
-Status:     <option name, or (none)>
+Labels:     <comma-separated names>
+Assignees:  <comma-separated logins>
+Type:       <issue-type name>
+Importance: <number>
+Status:     <option name>
 
-Parent:     #<N> <title>    (or (none))
+Parent:     #<N> <title>
 
 Sub-issues:
   - #<N> <title>
   - #<N> <title>
-  (or (none))
 
 Blocked by:
   - #<N> <title>
   - #<N> <title>
-  (or (none))
 
 Blocking:
   - #<N> <title>
   - #<N> <title>
-  (or (none))
 
 Body:
 <body verbatim>
 ```
+
+When a section has no entries, replace its body with a single
+`(none)` line — for the inline fields (`Labels:` through `Status:`
+and `Parent:`), that means the value column reads `(none)`; for the
+three list sections (`Sub-issues:`, `Blocked by:`, `Blocking:`),
+that means the section header is followed by one `(none)` line at
+the bullet indent instead of any `- #<N>` lines.
 
 The body is printed verbatim, including its own Markdown. Do not
 re-wrap or re-format it.

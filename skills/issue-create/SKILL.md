@@ -121,7 +121,7 @@ capitalization for type and status (per "Name -> ID lookup rules" in
 Example:
 
 ```
-Created issue #1042 "Add /issue:create skill"
+Created issue #1042 "Add /issue-create skill"
   type:       Feature
   importance: 3
   status:     Todo

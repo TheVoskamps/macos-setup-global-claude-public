@@ -69,9 +69,19 @@ aborts with the shared message.
 2. **Compute the new body**:
    - If `--body-file`: read the file. That's the new body.
    - Else if `--append` and/or `--prepend`: start from the current
-     body. Prepend lines (in CLI order) to the front, each followed
-     by `\n`. Append lines (in CLI order) to the end, each preceded
-     by `\n`. Preserve the existing body's trailing newline behavior.
+     body. Build a prepend-prefix by concatenating the `--prepend`
+     values in CLI order, each terminated by `\n` (so the first
+     `--prepend` ends up as the first line of the new body). Build an
+     append-suffix by joining the `--append` values in CLI order with
+     `\n` between them (so the first `--append` is the first appended
+     line). The new body is
+     `<prepend-prefix><current-body><separator><append-suffix>`,
+     where `<separator>` is the empty string if `<current-body>` ends
+     with `\n` (the GitHub default — the trailing newline already
+     separates the body from the first appended line, so do not insert
+     an extra blank line) and `\n` otherwise. If the new body does
+     not end with `\n`, add one so it matches GitHub's stored-body
+     convention.
    - Else: skip the body update entirely.
 
 3. **Apply edits via `gh issue edit`** in one call where possible.

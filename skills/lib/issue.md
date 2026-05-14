@@ -499,3 +499,11 @@ When writing a new `/issue-*` command's `.md`:
   ("uses the `addSubIssue` template from `skills/lib/issue.md`").
 - Do **not** restate the default-resolution order — reference it.
 - Do **not** restate the tracker-dispatch open — reference it.
+- **Flag naming for sets vs. add/remove.** Create-style verbs that
+  set a field outright use the singular `--assignee` and the plural
+  collection name `--labels` (the flag value is the full intended
+  set). Update-style verbs that mutate an existing list use the
+  plural pair `--add-assignees` / `--remove-assignees` and
+  `--add-labels` / `--remove-labels` (each flag value is a delta
+  applied to the current list). Stick to this split when adding new
+  verbs so callers don't have to remember per-verb spellings.

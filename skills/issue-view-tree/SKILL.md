@@ -110,7 +110,7 @@ When the depth cap fires, the placeholder line uses the same indent
 the next child would have used:
 
 ```
-  #<depth-5-node> <title>  <url>
+  #<cap-node> <title>  <url>
     Blocked by: (none)
     Blocking: (none)
       ... (depth cap)
