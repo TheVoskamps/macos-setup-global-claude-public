@@ -36,7 +36,24 @@ project metadata.
 
 ## GitHub path (`issues: GitHub`)
 
-1. If `--comment` was passed, post it first:
+Strip a leading `issue-link-prefix` (`#` for GitHub) from
+`<issue-number>` before invoking `gh`. Use the normalized integer in
+both the `gh` calls below and the report-back. `gh issue close #42`
+is not a valid invocation; `gh issue close 42` is.
+
+1. Fetch the issue title for the report-back:
+
+   ```bash
+   gh issue view <N> --json number,title,url --jq '.title'
+   ```
+
+   `gh issue close` and `gh issue comment` do not print the title, so
+   this lookup happens up front. Cache the result for use in step 4.
+   Surface any non-zero exit verbatim and stop — if `gh issue view`
+   fails, the issue likely doesn't exist or isn't accessible, and
+   neither commenting nor closing should proceed.
+
+2. If `--comment` was passed, post it first:
 
    ```bash
    gh issue comment <N> --body "<summary>"
@@ -46,16 +63,30 @@ project metadata.
    issue if the comment failed to post, otherwise the summary trail
    the user requested is missing.
 
-2. Close the issue:
+3. Close the issue:
 
    ```bash
    gh issue close <N>
    ```
 
-3. Report back:
-   - The issue number and title.
+4. Report back:
+   - The issue number and title (the title fetched in step 1).
    - Whether a comment was posted.
    - The new state (closed) and the URL.
+   - **Closing-keywords safety net.** If `--comment` was supplied,
+     scan the comment body for a closing keyword (case-insensitive:
+     `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`,
+     `resolves`, `resolved`) immediately followed by `#<N>` (allowing
+     whitespace between the keyword and the `#`). If any match, append
+     one line to the report-back:
+
+     > note: your comment contained closing keyword(s) referencing
+     > #X, which will auto-close that/those issue(s).
+
+     List every distinct `#X` that matched. Do **not** block the
+     operation; the user-supplied `--comment` is passed through
+     verbatim either way — this warning just makes the cascade-close
+     consequence visible.
 
 ## Jira path (`issues: Jira`)
 

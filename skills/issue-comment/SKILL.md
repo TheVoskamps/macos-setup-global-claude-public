@@ -29,8 +29,12 @@ for it and stop — do **not** search for "the right issue" by title or
 fall back to composing a body from context. The skill no longer
 guesses targets.
 
-If the file at `PATH` does not exist, is empty, or is unreadable,
-abort with a clear error and stop. Do not post an empty comment.
+If the file at `PATH` does not exist, is empty or whitespace-only, or
+is unreadable, abort with a clear error and stop. Do not post an
+empty comment. "Whitespace-only" means the file's contents match
+`\s*` — including a single trailing newline, a few spaces, or any
+combination of spaces/tabs/newlines — so a template that was prepared
+but never filled in is treated the same as a byte-empty file.
 
 ## Repo-config and tracker dispatch
 
@@ -42,15 +46,32 @@ project metadata.
 
 ## GitHub path (`issues: GitHub`)
 
-Run:
+Strip a leading `issue-link-prefix` (`#` for GitHub) from
+`<issue-number>` before invoking `gh`. Use the normalized integer in
+both the `gh` calls below and the report-back. `gh issue comment #42`
+is not a valid invocation; `gh issue comment 42` is.
 
-```bash
-gh issue comment <N> --body-file <PATH>
-```
+1. Fetch the issue title for the report-back:
 
-`gh` returns the new comment's URL on success; surface it in the
-report back along with the issue number and title. Surface any
-non-zero exit verbatim.
+   ```bash
+   gh issue view <N> --json number,title,url --jq '.title'
+   ```
+
+   `gh issue comment` returns the new comment's URL but not the issue
+   title, so this lookup happens up front. Cache the result for use
+   in the report-back. Surface any non-zero exit verbatim and stop —
+   if `gh issue view` fails, the issue likely doesn't exist or isn't
+   accessible, and the comment should not be posted.
+
+2. Post the comment:
+
+   ```bash
+   gh issue comment <N> --body-file <PATH>
+   ```
+
+   `gh` returns the new comment's URL on success; surface it in the
+   report back along with the issue number and the title fetched in
+   step 1. Surface any non-zero exit verbatim.
 
 ## Jira path (`issues: Jira`)
 
