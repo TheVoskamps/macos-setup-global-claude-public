@@ -61,6 +61,6 @@ aborts with the shared message.
 Print one confirmation line and the parent's URL:
 
 ```text
-Added issue #<C> as a sub-issue of #<P>.
+Linked issue #<C> as a sub-issue of #<P>.
 https://github.com/<owner>/<repo>/issues/<P>
 ```

@@ -20,9 +20,16 @@ documents only what is specific to `/issue-set-importance`.
 
 - `<issue-number>` (required): issue number in the current repo, with
   or without a leading `#`.
-- `<1-9>` (required): integer between 1 and 9 inclusive. Values
-  outside that range abort with a short usage reminder; the command
-  does not clamp.
+- `<1-9>` (required): integer between 1 and 9 inclusive. The command
+  does not clamp; any of the three rejection cases below aborts with
+  the "Invalid importance value" error from the catalogue in
+  `skills/lib/issue.md`:
+  - **Non-integer input** — e.g. `3.5`, `three`, anything that does
+    not parse as a base-10 integer.
+  - **Out-of-range integer** — e.g. `0`, `10`, or any integer outside
+    the closed interval `[1, 9]`.
+  - **Empty or missing argument** — the verb requires the value
+    explicitly; there is no implicit default.
 
 ## Tracker dispatch
 

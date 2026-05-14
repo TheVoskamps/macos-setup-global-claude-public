@@ -204,6 +204,12 @@ an existing edge it lives on **before** writing a new mutation
 template — odds are the mutation already exists in this doc and you
 just need to flip the arguments.
 
+`unset-child P C` treats a mismatched current parent (child's parent
+is something other than P) as a no-op — the end state "child is not
+under P" already holds. `unset-parent C` has no analogous case
+because the verb determines the parent by lookup rather than taking
+it as an argument.
+
 ## GraphQL templates
 
 All templates below are GitHub GraphQL v4 (`gh api graphql`). The
@@ -293,6 +299,7 @@ query($owner: String!, $repo: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
     issue(number: $number) {
       id
+      title
       subIssues(first: 50, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes { number title url }
@@ -301,6 +308,9 @@ query($owner: String!, $repo: String!, $number: Int!, $after: String) {
   }
 }
 ```
+
+`title` on the parent is constant across pages — read it from the
+first call's response and ignore it on subsequent pages.
 
 Caller loop:
 
@@ -528,6 +538,18 @@ Wrap variable parts in backticks.
   "field not found"-shaped GraphQL error. Surface this from
   `/issue-set-importance` and `/issue-set-status` so the user knows
   the fix is to re-run `/repo-config` rather than to retry blindly.
+
+- **Invalid importance value**
+
+  > importance value `<value>` is not an integer in 1-9. Importance
+  > must be an integer between 1 and 9 (inclusive).
+
+  Triggered by `/issue-set-importance` (and any future verb that
+  takes an importance argument) for non-integer input (e.g. `3.5`,
+  `three`), out-of-range integers (e.g. `0`, `10`), and empty or
+  missing input. The verb echoes back the offending `<value>`
+  verbatim (or `<empty>` if it was missing) so the user can see
+  what the parser actually received.
 
 When a command emits multiple warnings in one run (e.g. `--status`
 and `--importance` both skipped because `github-project:` is missing),

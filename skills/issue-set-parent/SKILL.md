@@ -33,10 +33,12 @@ aborts with the shared message.
 ## Execution (GitHub backend)
 
 1. **Look up node IDs for both issues** using the node-ID lookup
-   template from `skills/lib/issue.md`. Use the version with `id`,
-   `parent { id number title }`, and (for the parent lookup)
-   `subIssues(first: 50) { nodes { number } }` so the existing
-   relationship can be checked in one round-trip per side.
+   template from `skills/lib/issue.md`, trimmed to `id` plus
+   `parent { id number title }` on the child side (to detect an
+   existing same-parent or different-parent state in one round-trip).
+   The parent lookup needs only `id` — the idempotency check in step
+   2 reads the child's `parent.number`, not the parent's sub-issues
+   list.
 
 2. **Idempotency check.** If the child's existing `parent.number`
    already equals `<parent-N>`, no-op: print one line (`Issue #<C>

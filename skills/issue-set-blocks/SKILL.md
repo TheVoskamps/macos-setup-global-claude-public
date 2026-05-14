@@ -37,6 +37,10 @@ aborts with the shared message.
    template from `skills/lib/issue.md`, trimmed to `id` plus
    `blocking(first: 50) { nodes { number } }` on the blocker side
    (to detect an existing relationship for the idempotency check).
+   If the blocker issue might already be blocking more than 50 other
+   issues, the idempotency check may miss an existing edge and the
+   mutation will then no-op on the server side; the mutation itself
+   is safe to retry, so this is acceptable.
 
 2. **Idempotency check.** If `<blocked-N>` is already in the
    blocker's `blocking.nodes`, no-op: print one line (`Issue #<N>

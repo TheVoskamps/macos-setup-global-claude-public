@@ -35,6 +35,8 @@ aborts with the shared message.
    template from `skills/lib/issue.md`. The loop:
 
    - First call: pass `$after: null` (omit the variable).
+   - Record the parent's `title` from the first response (constant
+     across pages; used in the output header below).
    - Record `subIssues.nodes` into an accumulator.
    - While `subIssues.pageInfo.hasNextPage` is `true`, re-run the
      query with `$after: <pageInfo.endCursor>` and append the new
@@ -50,12 +52,13 @@ aborts with the shared message.
 
 ## Output
 
-Print a header line naming the parent, then one bullet line per
-direct sub-issue in the order GitHub returns them. If there are no
-sub-issues, print `(none)` instead of the bullet list.
+Print a header line naming the parent (number and title), then one
+bullet line per direct sub-issue in the order GitHub returns them.
+If there are no sub-issues, print `(none)` instead of the bullet
+list.
 
 ```text
-Sub-issues of #<parent-N>:
+Sub-issues of #<parent-N> "<title>":
   - #<N> <title>
   - #<N> <title>
   - ...
@@ -64,7 +67,7 @@ Sub-issues of #<parent-N>:
 When the parent has no sub-issues:
 
 ```text
-Sub-issues of #<parent-N>:
+Sub-issues of #<parent-N> "<title>":
   (none)
 ```
 
