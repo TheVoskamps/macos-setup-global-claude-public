@@ -4,11 +4,12 @@ This file is the single source of truth for the `/issue-*` command
 namespace. It is **reference prose**, not an executable script: Claude
 reads it when running any `/issue-*` command and follows the patterns
 documented here. Individual command files (`/issue-create`,
-`/issue-view`, `/issue-set-status`, `/issue-set-importance`,
-`/issue-set-parent`, `/issue-set-child`, `/issue-set-blocked-by`,
-`/issue-set-blocks`, `/issue-sub-list`, `/issue-close`,
-`/issue-comment`, etc.) reference this doc rather than duplicating
-GraphQL templates or default-resolution logic inline.
+`/issue-update`, `/issue-view`, `/issue-view-tree`,
+`/issue-set-status`, `/issue-set-importance`, `/issue-set-parent`,
+`/issue-set-child`, `/issue-set-blocked-by`, `/issue-set-blocks`,
+`/issue-sub-list`, `/issue-close`, `/issue-comment`, etc.)
+reference this doc rather than duplicating GraphQL templates or
+default-resolution logic inline.
 
 `/issue-address` is **not** part of this namespace and does not read
 this file — it is the higher-level multi-issue orchestrator and
