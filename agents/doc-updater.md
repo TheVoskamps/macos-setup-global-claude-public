@@ -1,6 +1,6 @@
 ---
 name: doc-updater
-description: Updates project documentation to reflect code changes. Given a PR number, issue number, and branch name, updates CLAUDE.md, relevant README.md files, repo-level .claude/rules/ and .claude/commands/, and anything under /docs. Invoke this after code changes are committed but before a PR is reviewed, or as a standalone task when docs are known to be stale.
+description: Updates project documentation to reflect code changes. Given a PR number, issue number, and branch name, updates CLAUDE.md, relevant README.md files, repo-level .claude/rules/ and .claude/skills/, and anything under /docs. Invoke this after code changes are committed but before a PR is reviewed, or as a standalone task when docs are known to be stale.
 tools: Read, Write, Edit, MultiEdit, Glob, Grep, Bash
 model: opus
 isolation: worktree
@@ -30,7 +30,7 @@ the worktree root. Parse the YAML front-matter for:
 
 If the file is missing, abort with: "This repo has no
 `.claude/rules/repo-config.md`. doc-updater requires it. See
-macos-setup for an example. Run /repo:config to create one
+macos-setup for an example. Run /repo-config to create one
 interactively."
 
 In the rest of this document, `<source-branch>`, `<link-prefix>`, and
@@ -119,9 +119,9 @@ Update any doc file that references the changed code. Common cases:
 ### Repo-level .claude/ documentation
 Update repo-level `.claude/` files when code changes invalidate them:
 - `.claude/rules/*.md` — engineering rules referenced by CLAUDE.md
-- `.claude/commands/**/*.md` — slash command definitions
+- `.claude/skills/**/SKILL.md` — skill definitions
 - `profiles/*/.claude/rules/*.md` and
-  `profiles/*/.claude/commands/**/*.md` — profile-tier copies
+  `profiles/*/.claude/skills/**/SKILL.md` — profile-tier copies
 
 Don't reformat or rewrite these files unless the code change actually
 contradicts what they say. They are not a fallback for "general

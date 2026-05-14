@@ -1,0 +1,405 @@
+---
+name: repo-config
+description: Interactively create or update `.claude/rules/repo-config.md` by interviewing the user about VCS and issue tracker.
+---
+
+You are running the `/repo-config` skill. Your job is to create or
+update the **target repo's** `.claude/rules/repo-config.md` by
+interviewing the user. This file is read by `/issue-address` and the
+`issue-developer`, `issue-fixer`, `doc-updater`, and `pr-reviewer`
+subagents at the start of every run, so it must be present and well
+formed before any of those flows will work.
+
+Follow the steps below in order. Do not write the file until the
+user has explicitly approved the proposed content.
+
+---
+
+## Step 1: Pre-flight
+
+Verify you are inside a git working tree by running:
+
+```bash
+git rev-parse --show-toplevel
+```
+
+If the command fails (non-zero exit, or stderr indicates "not a git
+repository"), abort with a clear message:
+
+> `/repo-config` must be run from inside a git repository. The current
+> directory is not a git working tree.
+
+Do not continue past this step on failure.
+
+Treat the path printed by `git rev-parse --show-toplevel` as the
+**repo root** for the rest of the skill — the skill writes
+`<repo-root>/.claude/rules/repo-config.md` regardless of which
+subdirectory of the worktree the user invoked the command from. Do
+**not** string-compare the printed path against the user's current
+working directory: `git rev-parse --show-toplevel` returns a real
+path, while the user's cwd may traverse symlinks (for example, on
+macOS `/tmp` resolves to `/private/tmp`, and project trees frequently
+sit under symlinked workspace directories). A naive equality check
+would mis-flag a legitimate repo as "not a repo root".
+
+## Step 2: Detect existing config
+
+Check whether `.claude/rules/repo-config.md` already exists in the
+target repo (relative to the repo root from Step 1).
+
+- **If it exists**: read the file and parse the YAML front-matter
+  (the block delimited by `---` at the top) into the six known keys
+  listed in Step 3. Any value found becomes the **recommended
+  default** for that field's question. Preserve the body of the
+  file (everything after the closing `---`) verbatim — Step 5 only
+  rewrites the front-matter when updating.
+- **If it does not exist**: use these built-in defaults:
+  - `source-control`: `GitHub`
+  - `issues`: `GitHub`
+  - `issue-link-prefix`: `#`
+  - `default-issue-source-branch`: `main`
+  - `default-pr-target-branch`: `main`
+  - `issue-branch-naming-prefix`: `none`
+
+If the existing file is malformed (missing front-matter delimiters,
+unparseable YAML, or contains keys you don't recognize), surface
+the problem to the user and ask whether to fall back to built-in
+defaults or stop. Do not attempt to silently "fix" the file.
+
+Also, before Step 3, gather the local branch list with
+`git branch --format='%(refname:short)'` so you can offer real
+branches as options for the two branch fields.
+
+## Step 2.5: Confirm intent to edit (existing file only)
+
+This step runs **only if the file existed** in Step 2. If the file
+did not exist, skip directly to Step 3.
+
+Many invocations of `/repo-config` are "just check what's
+configured", not "I want to change something". Walking through the
+six interview questions only to land on "don't change anything" is
+friction. Gate the interview behind a single yes/no so the common
+inspection case exits immediately.
+
+1. Display the **full current contents** of
+   `.claude/rules/repo-config.md` to the user — front-matter and
+   body, byte-for-byte as read from disk. Do not paraphrase, summarize,
+   or show only the front-matter; the user is inspecting the real
+   file.
+2. Ask via `AskUserQuestion`: "Do you want to make changes?" with
+   options `Yes` and `No`.
+3. **On `No`**: end the skill cleanly. Report that the file was
+   left unchanged at `<repo-root>/.claude/rules/repo-config.md`.
+   Do **not** enter the interview. Do **not** write or edit
+   anything. Skip Steps 3 through 6.
+4. **On `Yes`**: continue into Step 3 with current values as
+   recommended defaults (the existing behavior).
+
+Do not show a diff at this stage — Step 4 still owns the
+post-interview diff, and there is nothing to diff against yet.
+
+## Step 3: Interview
+
+Use the `AskUserQuestion` tool to interview the user. Ask the six
+fields **in the order below**. Group them into multiple
+`AskUserQuestion` calls as feels natural — the tool allows 1–4
+questions per call, and exact grouping is left to your judgment.
+
+For every question:
+
+- The **first option** must be the recommended/current value,
+  with its label suffixed `(Recommended)`.
+- Always include an "Other" option so the user can type a custom
+  value.
+- Keep option labels short; put any explanation in the question
+  text.
+
+The six fields, in order:
+
+1. **`source-control`** — choose `GitHub` or `CodeCommit`.
+   Recommend whatever the existing file had, otherwise `GitHub`.
+2. **`issues`** — choose `GitHub` or `Jira`. Recommend whatever
+   the existing file had, otherwise `GitHub`.
+3. **`issue-link-prefix`** — the literal string concatenated with
+   the issue number in commit messages and PR bodies. The recommended
+   value depends on the **just-chosen** value of `issues` (field 2),
+   not on what the existing file said, because users sometimes
+   re-run this skill specifically to switch issue trackers and the
+   old prefix is then meaningless.
+   - If the user picked `GitHub` for `issues`, recommend `#`
+     regardless of the existing value. (`#123` is the only sensible
+     GitHub form.)
+   - If the user picked `Jira` for `issues`:
+     - If the existing value ends with a dash and is non-empty (e.g.
+       `SET-`, `PROJ-`), recommend it — it is plausibly a Jira key.
+     - Otherwise (no existing value, or an existing value like `#`
+       carried over from a prior `GitHub` configuration), ignore the
+       existing value and prompt the user to enter the Jira project
+       key plus a trailing dash via "Other" (e.g. `SET-`, `PROJ-`).
+       Do not pre-fill `#` as a recommendation in the Jira case.
+4. **`default-issue-source-branch`** — branch that new issue work
+   branches FROM. Offer the local branches you gathered in Step 2
+   as options, plus "Other" for any branch name. Recommend the
+   existing value if any, otherwise `main`.
+5. **`default-pr-target-branch`** — branch that issue PRs target.
+   Same option set as field 4. Recommend the existing value if
+   any, otherwise default to whatever the user just chose for
+   `default-issue-source-branch` (often the same).
+6. **`issue-branch-naming-prefix`** — branch naming style.
+   Choose one of `none`, `initials`, `name`. Recommend whatever
+   the existing file had, otherwise `none`.
+
+Do not validate that the chosen branches actually exist on the
+remote; that is out of scope for this skill.
+
+## Step 4: Show the proposed file and wait for approval
+
+Render the resolved YAML front-matter to the user **before** writing
+anything. Format it exactly as it will appear in the file:
+
+```yaml
+---
+source-control: <value>
+issues: <value>
+issue-link-prefix: "<value>"
+default-issue-source-branch: <value>
+default-pr-target-branch: <value>
+issue-branch-naming-prefix: <value>
+---
+```
+
+Note: `issue-link-prefix` is always quoted because values like `#`
+are otherwise interpreted as a YAML comment.
+
+- If the file does **not** exist, also show the prose body that
+  will be written below the front-matter (see Step 5 for the body
+  text).
+- If the file **does** exist, show a clear diff of the front-matter
+  fields that are changing. Use exactly this format — one line per
+  changed field, with the key, the literal arrow ` -> `, and the
+  new value rendered the way it will appear in the file (quoted for
+  `issue-link-prefix`, bare for everything else):
+
+  ```text
+  Changes:
+    issues: GitHub -> Jira
+    issue-link-prefix: "#" -> "SET-"
+    default-pr-target-branch: main -> release
+  ```
+
+  List only fields whose value actually changed. If no front-matter
+  field is changing, say "No front-matter changes; nothing to
+  write." and skip Step 5. The body is preserved verbatim and is
+  not part of the diff.
+
+Then ask explicitly for approval, e.g.:
+
+> Write `.claude/rules/repo-config.md` with the values above? (y to
+> proceed, or tell me what to change)
+
+Wait for explicit approval (`y`, `yes`, `go`, `do it`, etc.) before
+moving to Step 5. If the user asks for changes, loop back to Step 3
+or Step 4 as appropriate.
+
+## Step 5: Write the file
+
+Use the standard `Write` or `Edit` tool so the diff is visible to
+the user.
+
+### New file (file did not exist before)
+
+In a brand-new repo `.claude/` and `.claude/rules/` may not exist
+yet. The Claude Code `Write` tool creates missing parent directories
+automatically, so calling `Write` on `.claude/rules/repo-config.md`
+when neither directory exists is safe. If you are using a different
+tool path that does not auto-create parents, run
+`mkdir -p .claude/rules` first.
+
+Write `.claude/rules/repo-config.md` with the resolved front-matter
+followed by this exact body:
+
+````markdown
+---
+source-control: <value>
+issues: <value>
+issue-link-prefix: "<value>"
+default-issue-source-branch: <value>
+default-pr-target-branch: <value>
+issue-branch-naming-prefix: <value>
+---
+
+# Repo Config
+
+Read by `/issue-address` and by the `issue-developer`, `issue-fixer`,
+`doc-updater`, and `pr-reviewer` subagents at the start of every run.
+Do not assume values are already in context — re-read this file every
+time.
+
+## Fields
+
+- **source-control**: `GitHub` or `CodeCommit`. Selects between `gh`
+  and `aws codecommit` for VCS operations.
+- **issues**: `GitHub` or `Jira`. Selects between `gh issue` and the
+  Jira CLI/API for issue operations.
+- **issue-link-prefix**: prefix used when referencing an issue in
+  commit messages and PR bodies. The orchestrator and agents
+  substitute it as a literal string concat: `<issue-link-prefix><N>`.
+  For GitHub repos, set this to `#` so references render as `#123`.
+  For Jira, use the project key plus dash, e.g. `SET-` (references
+  like `SET-123`).
+- **default-issue-source-branch**: branch that new issue work
+  branches FROM. The orchestrator must pin this when creating the
+  feature branch (e.g.
+  `git switch -c <name> origin/<source-branch>`) so the branch is
+  rooted at the right commit, not at whatever HEAD the worktree
+  happened to start on.
+- **default-pr-target-branch**: branch that issue PRs target. Often
+  the same as `default-issue-source-branch`, but not always.
+- **issue-branch-naming-prefix**: branch naming style.
+  - `none`     -> `issue-917-slug`
+  - `initials` -> `ev/issue-917-slug`
+  - `name`     -> `edwin/issue-917-slug`
+
+## Optional: `github-project:` block
+
+This section is **body-only**; it is not part of the six-key
+front-matter. Add it below the front-matter when the repo has an
+associated GitHub Project V2 board and you want the `/issue-*`
+commands (and `/issue-create`'s `--type` / `--importance` / `--status`
+flags in particular) to resolve human-readable names to the project's
+field IDs and option IDs.
+
+Repos without a project board **omit this block entirely**. The
+`/issue-*` commands degrade gracefully: project-specific flags emit a
+one-line warning and skip, while non-project operations work
+normally.
+
+Schema:
+
+```yaml
+github-project:
+  project-id: PVT_kwDO...     # ProjectV2 node ID
+  fields:
+    importance:
+      id: PVTF_lADO...        # number-field ID
+      type: number
+      default: 3
+    status:
+      id: PVTSSF_lADO...      # single-select field ID
+      type: single-select
+      default: Todo
+      options:
+        Backlog:     <option-id>
+        Todo:        <option-id>
+        In Progress: <option-id>
+        In review:   <option-id>
+        Done:        <option-id>
+  issue-types:
+    default: Feature
+    Bug:     IT_kwDO...
+    Feature: IT_kwDO...
+    Goal:    IT_kwDO...
+    Problem: IT_kwDO...
+```
+
+Keys:
+
+- **project-id**: the ProjectV2 node ID (starts with `PVT_`). Find
+  with `gh project list --owner <org>` and convert the project
+  number to a node ID via GraphQL.
+- **fields.importance.id / fields.status.id**: the field node IDs
+  (`PVTF_...` for number fields, `PVTSSF_...` for single-select).
+  Find with `gh project field-list <project-number> --owner <org>`.
+- **fields.\*.default**: optional per-field default. Resolution order
+  for any `/issue-*` flag is: CLI flag > this repo-config default >
+  built-in default (Feature / 3 / Todo / current GitHub user).
+- **fields.status.options**: the human-readable status names mapped
+  to their option IDs. `/issue-set-status` does a case-insensitive
+  match against this map; canonical capitalization for display comes
+  from the keys.
+- **issue-types**: the human-readable issue-type names mapped to
+  their type IDs (`IT_...`). `default:` selects which type
+  `/issue-create` uses when `--type` is not passed.
+
+The `/repo-config` skill will be able to auto-discover and populate
+this block interactively in a future release; today the block is
+maintained by hand. See `skills/lib/issue.md` for full details on
+how the block is consumed.
+
+The Jira branch (`issues: Jira`) gets a parallel `jira:` block when
+Jira support is implemented; today, `/issue-*` commands abort under
+Jira with the same "not implemented" message `/issue-address` uses.
+
+## Why this file exists
+
+Different repos use different VCS, issue trackers, and branching
+strategies. The `/issue-address` orchestrator and its subagents
+(`issue-developer`, `issue-fixer`, `doc-updater`, `pr-reviewer`)
+must not hardcode assumptions like "PR base is `main`", "use `gh`",
+or "issue link is `#NNN`". When a repo deviates, the orchestrator
+silently does the wrong thing. This file is the single source of
+truth that everything reads at the start of every run.
+
+If this file is missing, `/issue-address` aborts with an error
+pointing at this skill (`/repo-config`) to create one
+interactively.
+````
+
+The body is genericized: it does not reference any specific repo
+(such as `macos-setup`) by name, and it points at `/repo-config`
+as the way to create the file when it's missing.
+
+### Updating an existing file
+
+If the file already exists, **only the YAML front-matter changes**.
+Preserve the body (everything after the closing `---`) byte-for-byte.
+
+Use the `Edit` tool to replace the front-matter block.
+
+**Build `old_string` from the literal front-matter bytes you read in
+Step 2** (opening `---` line through the closing `---` line,
+inclusive, with their original line endings and surrounding
+whitespace). Do **not** reconstruct `old_string` from the parsed
+key/value pairs or from the canonical six-key template shown in
+Step 4. Hand-edited files commonly differ from the canonical form
+in ways that don't change semantics but break exact-string
+matching: keys reordered, extra blank lines between keys, trailing
+spaces, comments inserted between keys, single vs. double quoting.
+A reconstructed `old_string` will fail to match any of these,
+causing `Edit` to error after the user has already completed the
+full interview. Reading the existing bytes verbatim and using them
+as `old_string` is the only reliable way.
+
+This dovetails with Step 2's "Preserve the body of the file
+verbatim" guarantee: the same byte-faithful reading discipline
+applies on both sides of the closing `---`.
+
+`new_string` is the freshly rendered six-key block from Step 4
+(canonical key order, canonical quoting, no comments, no extra blank
+lines). Do not touch the body.
+
+## Step 6: Summarize
+
+After the file is written, report back:
+
+- The absolute path written.
+- The final resolved values for all six fields.
+- Whether this was a new file or an update.
+- Next step: the user can now run `/issue-address` and the
+  associated subagents in this repo.
+
+---
+
+## Hard constraints
+
+- **Never write the file without explicit approval** in Step 4.
+- **Never edit anything outside the target repo.** The skill writes
+  exactly one file: `<repo-root>/.claude/rules/repo-config.md`.
+- **Never run destructive git commands.** This skill does not
+  commit, push, branch, reset, or otherwise change git state. The
+  user commits the new file themselves.
+- **Always go through `Edit` or `Write`** so the diff is visible.
+- **Do not validate remote branch existence** — out of scope.
+- **Do not migrate other config schemas.** If the existing file
+  uses unknown keys, surface the problem and stop; do not silently
+  drop or rename keys.
