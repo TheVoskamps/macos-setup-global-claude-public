@@ -309,7 +309,9 @@ where `type` is one of `ProjectV2Field`, `ProjectV2SingleSelectField`,
 `ProjectV2IterationField`, and `options` is present only on
 single-select fields as an array of `{ id, name }`.
 
-**Status field** (required if the user chose `Populate` or `Update`):
+**Status field** (strongly recommended if the user chose `Populate` or
+`Update`; can still be skipped via `Skip status field` below, in which
+case `fields.status` is omitted from the block per the rules in 3b.5):
 
 - Find the single-select field named `Status` (case-insensitive). If
   exactly one match is found, use it. If multiple single-select fields
@@ -330,15 +332,54 @@ single-select fields as an array of `{ id, name }`.
 
 **Importance field** (optional):
 
-- Find a number field named `Importance` (case-insensitive). A number
-  field has `type == "ProjectV2Field"` and no `options`; the JSON
-  output does not always carry a discriminator beyond `type`, so
-  identify number-vs-text by checking the schema if needed (number
-  fields in projects are typed; if the discovery output is ambiguous,
-  ask the user to confirm by entering a sample value or just skip).
-- If exactly one match is found, propose it. Otherwise present all
-  number fields (or all non-single-select fields if the type isn't
-  exposed) plus `None / skip importance`.
+Detecting which fields are number-typed is the tricky part. The
+`gh project field-list` JSON returns `type == "ProjectV2Field"` for
+**every** non-single-select, non-iteration field — Title, Assignees,
+Labels, Milestone, Repository, Reviewers, Parent issue, Sub-issues
+progress, Estimate, Start date, Target date, Importance, and any
+custom text/number/date field the user has added. The `type`
+discriminator alone is not enough to identify a number field. Use a
+two-probe sequence:
+
+1. **First probe — `gh project field-list` JSON.** Look for a field
+   whose `name` matches `Importance` (case-insensitive) and whose
+   `type == "ProjectV2Field"`. If exactly one such field exists,
+   propose it. The JSON does not tell you whether it is number-typed,
+   but the name match plus the "not single-select / not iteration"
+   constraint is usually specific enough in practice.
+
+2. **Second probe — GraphQL `dataType` (canonical discriminator).**
+   When the first probe is ambiguous (multiple `ProjectV2Field` fields
+   match `Importance`, or no name match and you need to enumerate all
+   number fields), fall back to the ProjectV2 fields connection over
+   GraphQL, which exposes `dataType`:
+
+   ```bash
+   gh api graphql -F number=<project-number> -F owner=<owner> -f query='
+   query($owner: String!, $number: Int!) {
+     organization(login: $owner) {
+       projectV2(number: $number) {
+         fields(first: 100) {
+           nodes {
+             ... on ProjectV2Field          { id name dataType }
+             ... on ProjectV2SingleSelectField { id name dataType }
+             ... on ProjectV2IterationField { id name dataType }
+           }
+         }
+       }
+     }
+   }'
+   ```
+
+   If the owner is a user (not an org), swap `organization(login:)`
+   for `user(login:)`. `dataType` is one of `NUMBER`, `TEXT`, `DATE`,
+   `SINGLE_SELECT`, `ITERATION`, `TITLE`, `ASSIGNEES`, `LABELS`,
+   `MILESTONE`, `REPOSITORY`, `REVIEWERS`, `LINKED_PULL_REQUESTS`,
+   `TRACKS`, `TRACKED_BY`. Filter to `dataType == "NUMBER"` — this
+   is the canonical discriminator and is unambiguous.
+
+- If exactly one number field is found (by either probe), propose it.
+  Otherwise present all number fields plus `None / skip importance`.
 - If a field is selected, capture its `id` (`PVTF_...`) and ask the
   user for a **default importance value** (integer or float). Recommend
   the existing block's `fields.importance.default` if any, else `3`.
@@ -770,15 +811,36 @@ prepend the new region to it. The anchor is the first non-blank
 line in the body — for the canonical body template this is the
 `# Repo Config` heading.
 
-- `old_string`: the anchor line, captured verbatim from the file
-  (e.g. `# Repo Config\n`).
-- `new_string`: the new block (or skip marker), followed by a single
-  blank line, followed by the same anchor line.
+To make the anchor unique by construction, always expand it to the
+**canonical first two lines** of the body template:
 
-If the anchor is not unique within the file (unlikely for
-`# Repo Config` but worth checking), expand `old_string` to include
-a few lines after the anchor to make it unique. This is the same
-disambiguation discipline `Edit` expects in general.
+```text
+# Repo Config
+
+Read by `/issue-address` and by the `issue-developer`, `issue-fixer`,
+```
+
+The phrase "Read by `/issue-address`" is part of the canonical body
+template (see Step 5's "canonical body template") and is extremely
+unlikely to appear elsewhere in the file. This builds disambiguation
+in rather than hinting at it.
+
+- `old_string`: the canonical first two lines of the body, captured
+  **verbatim from the file** (so line endings and any trailing
+  whitespace match exactly). Concretely, that is the `# Repo Config`
+  heading line, the following blank line, and the `Read by ...` line
+  that begins the prose body.
+- `new_string`: the new block (or skip marker), followed by a single
+  blank line, followed by the same captured anchor bytes.
+
+If the file's body deviates from the canonical template — for example,
+a hand-edited repo-config whose body starts with something other than
+`# Repo Config` followed by the "Read by `/issue-address`" line, or
+which has been reordered such that those two lines are not adjacent —
+fall back to the general `Edit` disambiguation discipline: extend
+`old_string` further with whatever surrounding lines are needed to
+make the match unique. Do not write blindly when the anchor cannot
+be located unambiguously; surface the situation to the user and stop.
 
 ### Verification
 
