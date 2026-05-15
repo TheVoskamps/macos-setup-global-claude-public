@@ -80,8 +80,10 @@ halves exist:
 
 If either is missing, abort with a message naming the exact path
 that was missing and reminding the user to generate the keypair
-with `ssh-keygen` (e.g. `ssh-keygen -t ed25519 -C
-'<repo>-mirror' -f <path>`). Do not offer to generate the key
+with `ssh-keygen`. Use the same `<short>-public` suffix as the
+mirror repo so the key→repo mapping is obvious (e.g.
+`ssh-keygen -t ed25519 -C '<short>-public'
+-f ~/.ssh/<short>-public`). Do not offer to generate the key
 yourself — key generation is out of scope and blocked by
 `settings.json`.
 
