@@ -6,10 +6,11 @@ reads it when running any `/issue-*` command and follows the patterns
 documented here. Individual command files (`/issue-create`,
 `/issue-update`, `/issue-view`, `/issue-view-tree`,
 `/issue-set-status`, `/issue-set-importance`, `/issue-set-parent`,
-`/issue-set-child`, `/issue-set-blocked-by`, `/issue-set-blocks`,
-`/issue-sub-list`, `/issue-close`, `/issue-comment`, etc.)
-reference this doc rather than duplicating GraphQL templates or
-default-resolution logic inline.
+`/issue-unset-parent`, `/issue-set-child`, `/issue-unset-child`,
+`/issue-sub-list`, `/issue-set-blocked-by`, `/issue-unset-blocked-by`,
+`/issue-set-blocks`, `/issue-unset-blocks`, `/issue-close`,
+`/issue-comment`, etc.) reference this doc rather than duplicating
+GraphQL templates or default-resolution logic inline.
 
 `/issue-address` is **not** part of this namespace and does not read
 this file — it is the higher-level multi-issue orchestrator and
@@ -85,9 +86,11 @@ entirely. In that case:
 
 - Commands that only touch the issue itself (`/issue-create` without
   `--type/--importance/--status`, `/issue-update`, `/issue-close`,
-  `/issue-comment`, `/issue-set-parent`, `/issue-set-child`,
-  `/issue-set-blocked-by`, `/issue-set-blocks`, `/issue-sub-list`,
-  `/issue-view`) work normally — they don't need project metadata.
+  `/issue-comment`, `/issue-set-parent`, `/issue-unset-parent`,
+  `/issue-set-child`, `/issue-unset-child`, `/issue-sub-list`,
+  `/issue-set-blocked-by`, `/issue-unset-blocked-by`,
+  `/issue-set-blocks`, `/issue-unset-blocks`, `/issue-view`) work
+  normally — they don't need project metadata.
 - Commands or flags that **require** project metadata
   (`--type`, `--importance`, `--status`, `/issue-set-importance`,
   `/issue-set-status`) emit a one-line warning and skip that step
@@ -201,6 +204,12 @@ an existing edge it lives on **before** writing a new mutation
 template — odds are the mutation already exists in this doc and you
 just need to flip the arguments.
 
+`unset-child P C` treats a mismatched current parent (child's parent
+is something other than P) as a no-op — the end state "child is not
+under P" already holds. `unset-parent C` has no analogous case
+because the verb determines the parent by lookup rather than taking
+it as an argument.
+
 ## GraphQL templates
 
 All templates below are GitHub GraphQL v4 (`gh api graphql`). The
@@ -241,7 +250,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       title
       url
       issueType { id name }
-      parent { number title }
+      parent { id number title }
       subIssues(first: 50)  { nodes { number title url } }
       blockedBy(first: 50)  { nodes { number title url } }
       blocking(first: 50)   { nodes { number title url } }
@@ -276,6 +285,45 @@ query($owner: String!, $repo: String!, $number: Int!) {
 Most commands need only a subset of those fields. Trim the query to
 what the caller actually uses; the shape above is what `/issue-view`
 returns in one shot.
+
+### Sub-issues paginated lookup
+
+When listing all direct sub-issues of an issue (e.g. `/issue-sub-list`),
+the catch-all template's `subIssues(first: 50)` is not enough if a
+parent has more than 50 children. Use this dedicated paginated form
+instead, driving the `$after` cursor until `pageInfo.hasNextPage` is
+`false`:
+
+```graphql
+query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      id
+      title
+      subIssues(first: 50, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number title url }
+      }
+    }
+  }
+}
+```
+
+`title` on the parent is constant across pages — read it from the
+first call's response and ignore it on subsequent pages.
+
+Caller loop:
+
+1. First call: pass `$after: null` (omit the variable). Record `nodes`.
+2. While `pageInfo.hasNextPage` is `true`, re-run with
+   `$after: <pageInfo.endCursor>` and append the new `nodes` to the
+   accumulated list.
+3. Stop when `hasNextPage` is `false`. Render the accumulated list in
+   returned order.
+
+Callers that only ever need the first page (e.g. `/issue-view`,
+`/issue-view-tree`) keep using the catch-all template's
+`subIssues(first: 50)` shape and skip the pagination loop.
 
 ### Project-item lookup
 
@@ -479,6 +527,29 @@ Wrap variable parts in backticks.
 
   > issue type `<name>` not in repo's `github-project.issue-types`.
   > Known types: `<comma-separated canonical names>`
+
+- **Project field ID no longer exists on the project**
+
+  > project field `<field-id>` no longer exists on project
+  > `<project-id>`; the cached IDs in `repo-config.md` may be stale.
+  > Run `/repo-config` to refresh them.
+
+  Triggered when `updateProjectV2ItemFieldValue` returns a
+  "field not found"-shaped GraphQL error. Surface this from
+  `/issue-set-importance` and `/issue-set-status` so the user knows
+  the fix is to re-run `/repo-config` rather than to retry blindly.
+
+- **Invalid importance value**
+
+  > importance value `<value>` is not an integer in 1-9. Importance
+  > must be an integer between 1 and 9 (inclusive).
+
+  Triggered by `/issue-set-importance` (and any future verb that
+  takes an importance argument) for non-integer input (e.g. `3.5`,
+  `three`), out-of-range integers (e.g. `0`, `10`), and empty or
+  missing input. The verb echoes back the offending `<value>`
+  verbatim (or `<empty>` if it was missing) so the user can see
+  what the parser actually received.
 
 When a command emits multiple warnings in one run (e.g. `--status`
 and `--importance` both skipped because `github-project:` is missing),
