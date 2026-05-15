@@ -149,8 +149,8 @@ problem entirely rather than working around it.
   to require any of these, restructure it: from the worktree root,
   most subdirectory-scoped git operations have a pathspec equivalent
   (`git diff -- <subdir>`, `git log -- <subdir>`, `git add <subdir>`).
-- The harness's auto-created branch is named `worktree-<random>`
-  (e.g. `worktree-bright-running-fox`). The subagent's first action
+- The harness's auto-created branch is named `worktree-agent-<hash>`
+  (e.g. `worktree-agent-a39b0297dc3421b9e`). The subagent's first action
   should be to switch to its task-specific branch. Use the defensive
   `switch -c ... || switch ...` form so a leftover branch from a
   prior aborted run doesn't error the new run:
