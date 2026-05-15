@@ -147,21 +147,7 @@ AWS CLI profiles are configured for IAM Identity Center SSO access with the form
 
 **Refreshing expired credentials**:
 
-When credentials expire, you yourself refresh credentials and do not ask the user to:
-
-```bash
-aws sso login --profile <profile-name>
-```
-
-Do NOT run this with a `--no-browser` flag. The Bash tool runs as a non-interactive background process, so it cannot accept the interactive device-code paste that `--no-browser` requires. The default `aws sso login` (no flag) works because it hands off to the OS to open the browser and then only polls for completion — no stdin or terminal interaction is needed.
-
-Example:
-
-```bash
-aws sso login --profile ExampleManagementAdmin-ACCOUNT
-```
-
-This will open a browser for authentication. Session durations are controlled by the permission set configuration.
+When AWS SSO credentials expire (`Token has expired and refresh failed` or similar), report the failure and stop. The user will run `aws sso login --profile <name>` on their own and tell you to retry. See `credential-surfaces.md` for the full rule. Do NOT run `aws sso login` yourself.
 
 ## Credentials to the `kubectl` command
 
