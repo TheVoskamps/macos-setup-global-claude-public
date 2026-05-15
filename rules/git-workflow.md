@@ -163,7 +163,7 @@ work must run:
 
 ```text
 git push
-git checkout <base-branch>
+git checkout --detach          # release the feature-branch claim
 git branch -D <feature-branch>
 ```
 
@@ -172,6 +172,19 @@ This releases the branch claim so a subsequent subagent's worktree
 branch) can check out the same branch. Without this cleanup, the
 next worktree creation fails because git refuses to check out a
 branch already claimed by another worktree.
+
+**Why `--detach` and not `git checkout <base-branch>`:** in the
+standard single-clone topology the orchestrator's primary clone is
+already holding `<base-branch>` (typically `main`), so a subagent
+worktree cannot `git checkout main` — git refuses to check out a
+branch claimed by another worktree (`fatal: 'main' is already used
+by worktree at '<primary-clone-path>'`). Detaching HEAD releases the
+feature-branch claim equivalently: the feature branch is no longer
+checked out by any worktree, so the next subagent's worktree can
+re-check-it-out from `origin` without conflict. A named alternative
+that also works is `git switch worktree-agent-<hash>` (the harness's
+auto-created branch the worktree started on), but `--detach` is
+simpler because it doesn't require recovering that name.
 
 Subagents that only read remote state (e.g. `pr-reviewer`
 reviewing a PR diff via `gh`) skip the cleanup — there's nothing
