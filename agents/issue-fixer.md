@@ -102,9 +102,15 @@ If any are missing, ask before proceeding.
     subagents can check out the same branch:
 
     ```bash
-    git checkout <source-branch>
+    git checkout --detach
     git branch -D <branch-name>
     ```
+
+    Use `--detach` (not `git checkout <source-branch>`) because the
+    orchestrator's primary clone is already holding `<source-branch>`,
+    so a subagent worktree can't switch to it. Detaching HEAD releases
+    the feature-branch claim equivalently. See `git-workflow.md` →
+    "End-of-run cleanup pattern".
 
 12. Report back:
     - Which Critical/High findings were addressed and how

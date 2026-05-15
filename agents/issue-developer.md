@@ -122,12 +122,16 @@ spawn prompt does not give them, ask before proceeding.
     branch in their own worktrees:
 
     ```bash
-    git checkout <source-branch>
+    git checkout --detach
     git branch -D <branch-name>
     ```
 
     Without this, git refuses to check out a branch already claimed by
-    another worktree.
+    another worktree. Use `--detach` (not `git checkout <source-branch>`)
+    because the orchestrator's primary clone is already holding
+    `<source-branch>`, so a subagent worktree can't switch to it.
+    Detaching HEAD releases the feature-branch claim equivalently.
+    See `git-workflow.md` → "End-of-run cleanup pattern".
 
 12. Report back: PR URL (or equivalent), issue number, branch name.
     (The orchestrator handles the worktree directory itself; the
