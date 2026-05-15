@@ -1,48 +1,69 @@
 # Credential Surfaces Are User-Owned
 
-When a git, ssh, gpg, or AWS command fails with an authentication
-error -- SSH `Permission denied (publickey)`, SSO `Token has
-expired`, gpg-agent unlocked-key timeout, etc. -- the credential
-surface (SSH agent, SSO cache, GPG agent, keyring) is the user's.
+The user's credential agents (SSH agent, SSO token cache, GPG
+agent, system keychain) are the user's. Don't probe them. Don't
+manipulate them. But running a normal command that prompts for
+credentials is fine -- that is no different from any other
+command that blocks on I/O.
 
-## Required behavior on auth failure
+## What's allowed
+
+Commands whose normal flow prompts the user for credentials are
+fine to run. The harness surfaces the prompt; the user responds
+on their own time; the command continues:
+
+- `git push`, `git pull`, `git fetch` (may prompt for SSH key
+  passphrase or HTTPS credential helper).
+- `aws sso login --profile <name>` (opens a browser for SSO).
+- `gh auth login` (opens a browser for GitHub).
+- `kubectl` operations that hit an EKS cluster and require
+  fresh IAM credentials.
+
+Running these is no different from running any other command
+that might block on I/O. If the user is slow to respond, wait.
+
+## What's forbidden
+
+Do NOT, on your own initiative, run tools that **inspect or
+manipulate the user's credential agent state**:
+
+- `ssh-add`, `ssh-agent`, `keychain`.
+- macOS `security` CLI against the keychain.
+- `gpg-connect-agent`, `gpgconf`.
+- Reading or listing `~/.ssh/`, `~/.aws/sso/cache/`,
+  `~/.gnupg/`, or `~/Library/Keychains/`.
+- Switching from SSH to HTTPS (or vice versa) for git remotes,
+  swapping AWS profiles, or rewriting remote URLs to dodge an
+  auth failure.
+- Looping a failing command with `sleep` in the hope the agent
+  comes back.
+
+These are agent introspection, not normal command execution.
+
+## On auth failure
+
+When a normal command fails with an auth error:
 
 1. State the failure plainly.
-2. Stop. Do not retry, do not investigate.
-3. Wait for the user. They are likely mid-task in another
-   window: unlocking a key, approving MFA on a phone,
-   typing a passphrase, dealing with a browser flow.
-4. When the user tells you to retry, re-run the exact
-   original command verbatim.
-5. If the same command fails a second time after the
-   retry, surface that and stop again. Do not escalate
-   to different tools, different auth paths, or different
-   profiles without being asked.
-
-## Forbidden tools and probes
-
-Do NOT, on your own initiative:
-
-- Run `ssh-add`, `ssh-agent`, `keychain`, `security`,
-  `gpg-connect-agent`, or any tool that inspects or
-  manipulates the user's credential agent.
-- Run `aws sso login` to refresh an expired SSO token.
-  Report the expired token and wait for the user to
-  refresh it.
-- Read or list files under `~/.ssh/`, `~/.aws/sso/cache/`,
-  `~/.gnupg/`, or `~/Library/Keychains/`.
-- Switch from SSH to HTTPS (or vice versa) for git
-  remotes, swap AWS profiles, or rewrite remote URLs.
-- Loop a failing command with `sleep` in the hope the
-  agent comes back.
+2. If the failure is **expired or missing credentials** and the
+   fix is a single credential-prompting command from "What's
+   allowed" above, run that command. Wait for the user to
+   complete the browser flow or unlock prompt.
+3. If the failure is **agent-state opaque** -- e.g. SSH
+   `Permission denied (publickey)` with no clear single-command
+   fix -- stop. Report the failure. Wait for the user to deal
+   with it. When told to retry, re-run the exact original
+   command verbatim.
+4. Never escalate to forbidden tools from "What's forbidden".
+   If the obvious credential-prompting command doesn't resolve
+   the failure, stop and ask the user.
 
 ## Why
 
-SSH, SSO, and GPG agent state is owned by the user, not
-by me. The user is usually mid-task on something else when
-auth fails. Probing credential surfaces also risks
-accidentally caching, exporting, or logging credentials
-that should stay in the agent.
-
-The right behavior is patience and a clean retry on
-prompt, not investigation.
+The agent's state is the user's. Probing or manipulating it
+risks accidentally caching, exporting, or logging credentials
+that should stay in the agent. Running commands that happen to
+trigger an OS-level credential prompt is a different category
+entirely -- those commands are the normal way the user supplies
+credentials, and waiting for the user to respond is the same
+patience required by any blocking I/O.
