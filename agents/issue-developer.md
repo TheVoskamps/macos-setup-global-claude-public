@@ -95,9 +95,18 @@ spawn prompt does not give them, ask before proceeding.
 7. Run the test suite: if tests fail and aren't related to your fix,
    note it in the PR.
 
-8. Commit with an imperative commit message, ending with:
-   `References: <link-prefix><N>`. NEVER use closing keywords (closes,
-   fixes, resolves) — they auto-close issues.
+8. Commit with an imperative commit message. NEVER use closing
+   keywords (closes, fixes, resolves) — they auto-close issues.
+
+   `References:` lines on the PR/commit must list only *other* related
+   issues — typically the ones the parent issue itself references. Do
+   NOT include the parent issue (the one being fixed) in `References:`.
+   The PR is the work for that issue; the linkage is already
+   established by branch name and PR title/description. If the parent
+   issue's body references other issues (predecessors, follow-ups,
+   umbrella issues, etc.), add one `References: <link-prefix><M>` line
+   per such issue. If there are no other related issues, omit
+   `References:` entirely.
 
 9. Push the branch.
 
@@ -108,10 +117,13 @@ spawn prompt does not give them, ask before proceeding.
     gh pr create --base <target-branch> \
       --title "<Imperative description>" \
       --body "## Summary
-    <what changed and why>
-
-    References: <link-prefix><N>"
+    <what changed and why>"
     ```
+
+    Append a `References: <link-prefix><M>` line per *other* related
+    issue (one per line) if the parent issue body references them. Do
+    NOT add `References: <link-prefix><N>` for the parent issue N — see
+    step 8.
 
     If `source-control == CodeCommit`: TODO — CodeCommit PR-create
     path not yet implemented. Abort with: "CodeCommit source-control

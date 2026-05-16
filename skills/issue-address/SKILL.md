@@ -161,6 +161,8 @@ Do NOT pass:
 - generic git workflow instructions
 - end-of-run cleanup steps
 - "use this gh command" templates
+- instructions to write `References: <link-prefix><N>` for the parent
+  issue N — that is forbidden (see Hard Constraints below)
 - anything else that belongs in the agent definition
 
 The agents read the config and know their own workflow. Trust them.
@@ -321,6 +323,15 @@ To start the sequential queue, reply: "continue with <link-prefix>103"
 - **Never spawn a Wave 2 issue concurrently with a conflicting Wave 1 issue.**
 - **Never pass a `worktree_path` in a spawn prompt.** All four teammates declare `isolation: worktree` and the harness handles their working directory. Pass branch name + PR number + issue number instead.
 - **Never duplicate agent runbooks in spawn prompts.** Trust the agent to read its own definition and the per-repo config.
+- **Never instruct a teammate to write `References: <link-prefix><N>`
+  for the parent issue N.** `References:` lines on the PR/commit must
+  list only *other* related issues — typically the ones the parent
+  issue itself references (predecessors, follow-ups, umbrella issues,
+  etc.). Do NOT include the parent issue (the one being fixed) in
+  `References:`. The PR is the work for that issue; the linkage is
+  already established by branch name and PR title/description.
+  Closing-keyword prohibition (`Closes:`, `Fixes:`, `Resolves:`) stays
+  as-is — those still auto-close and must never appear.
 - **Never run subagent worktree cleanup in parallel.** Cleanup is serial within a wave, per Anthropic issue #48927.
 - **Always wait for explicit human confirmation** before starting Phase 2.
 - **Max 3 review rounds per PR.** Escalate to human after that.
