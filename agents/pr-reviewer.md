@@ -50,12 +50,20 @@ In the rest of this document, `<link-prefix>` means the resolved value.
    - If `source-control == CodeCommit`: TODO — CodeCommit diff path
      not implemented. Abort with: "CodeCommit source-control selected,
      but the diff-fetch path is not implemented. See #104."
-2. Fetch the linked issue reference from the PR body. The expected
-   trailer format is `References: <link-prefix><N>` (e.g.
-   `References: #123` for GitHub, `References: SET-123` for Jira).
-   The project's git-workflow rule forbids closing keywords like
+2. Identify the parent issue this PR is for. The parent issue is
+   established by the **branch name** (typically `issue-<N>-<slug>`,
+   `<initials>/issue-<N>-<slug>`, or `<name>/issue-<N>-<slug>` —
+   depends on `issue-branch-naming-prefix`) and the PR title /
+   description, **not** by a `References:` trailer. The git-workflow
+   rule explicitly forbids self-referencing the parent issue with
+   `References: <link-prefix><N>`. Any `References:` lines you do see
+   in the PR body should point to *other* related issues
+   (predecessors, follow-ups, umbrella issues, etc.) and use the
+   `References: <link-prefix><M>` trailer format (e.g. `References:
+   #42` on GitHub, `References: SET-42` on Jira). The git-workflow
+   rule also forbids closing keywords like
    `closes`/`fixes`/`resolves`. To fetch the PR body on GitHub, use
-   `gh pr view <number> --json body`.
+   `gh pr view <number> --json body,headRefName`.
 3. (Optional) If the change benefits from being exercised — e.g. a
    tricky function, a CLI workflow, a regression risk — check out the
    PR branch in your worktree and verify behavior:
@@ -85,7 +93,9 @@ In the rest of this document, `<link-prefix>` means the resolved value.
 - Does the fix actually address what the issue describes?
 - Are there untested edge cases?
 - Does it introduce any regressions?
-- Is the commit message conventional and linked to the issue?
+- Is the commit message conventional? Does it avoid closing keywords
+  (`closes`/`fixes`/`resolves`) and self-referencing the parent issue
+  via `References: <link-prefix><N>`?
 - Any security vulnerabilities that could expose data or allow
   unauthorized access
 - Any logic errors that could cause system failures or data corruption

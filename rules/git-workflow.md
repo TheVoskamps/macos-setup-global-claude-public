@@ -226,11 +226,24 @@ issues:
   `resolve`, `resolves`, `resolved`.
 - ❌ These keywords are case-insensitive and will auto-close the
   referenced issue.
-- ✅ Always use: `References: #123` (for multiple issues, repeat the
-  line).
+- ✅ Use a `References: #N` trailer to link *other* related issues
+  (predecessors, follow-ups, umbrella issues, etc.). For multiple,
+  repeat the line.
 
 **Why:** issues should only be closed manually after verification, not
 automatically by commits.
+
+#### CRITICAL — never self-reference the parent issue
+
+A PR/commit for issue N must **not** include `References: #N` for that
+same issue N:
+
+- ❌ Never put the parent issue (the one being fixed) in
+  `References:`. The PR is the work for that issue; its linkage is
+  already established by branch name and PR title/description.
+- ✅ `References:` lines list only *other* related issues — typically
+  the ones the parent issue itself references in its body. If there
+  are no other related issues, omit `References:` entirely.
 
 **Applies to:**
 
@@ -240,17 +253,27 @@ automatically by commits.
 
 **Examples:**
 
-Single issue:
+No related issues — omit the trailer entirely:
+
+```text
+Add ARM64 support to CI/CD pipelines
+
+Implements CodeBuild environment overrides for ARM64 Docker builds.
+```
+
+One other related issue (e.g. parent issue body says "blocked by
+issue 42"):
 
 ```text
 Add ARM64 support to CI/CD pipelines
 
 Implements CodeBuild environment overrides for ARM64 Docker builds.
 
-References: #89
+References: #42
 ```
 
-Multiple issues:
+Multiple other related issues (predecessors, follow-ups, umbrella
+issues — but **not** the issue being fixed):
 
 ```text
 Update authentication system

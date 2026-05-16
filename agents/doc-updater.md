@@ -43,7 +43,8 @@ In the rest of this document, `<source-branch>`, `<link-prefix>`, and
 You must be given:
 
 - PR number (for diff/view of the PR; CLI selected by `source-control`)
-- Issue number (for the `References: <link-prefix><N>` trailer on your commit)
+- Issue number (for context — the parent issue this PR is for; do NOT
+  put it in a `References:` trailer, see Output step 3)
 - Branch name (`<branch-name>`) — you check this out before making changes
 
 Do not assume you inherit cwd, branch, or any other context from a
@@ -155,13 +156,19 @@ After making all edits:
 
 1. Run `git diff --stat` to show what doc files changed
 2. Stage the doc changes: `git add CLAUDE.md README.md docs/` (adjust paths)
-3. Commit with an imperative message ending with
-   `References: <link-prefix><issue_number>`, e.g.
-   `Update documentation for self-update workflow\n\nReferences: #67`
-   on a GitHub repo, or
-   `Update documentation for self-update workflow\n\nReferences: SET-67`
-   on a Jira repo. NEVER use closing keywords (closes, fixes,
-   resolves) — they auto-close issues.
+3. Commit with an imperative message describing the doc updates, e.g.
+   `Update documentation for self-update workflow`. NEVER use closing
+   keywords (closes, fixes, resolves) — they auto-close issues.
+
+   `References:` lines on the commit must list only *other* related
+   issues — typically the ones the parent issue itself references. Do
+   NOT include the parent issue (the one this PR is for) in
+   `References:`. The PR is the work for that issue; the linkage is
+   already established by branch name and PR title/description. If the
+   parent issue's body references other issues (predecessors,
+   follow-ups, umbrella issues, etc.), add one
+   `References: <link-prefix><M>` line per such issue. If there are no
+   other related issues, omit `References:` entirely.
 4. Push the doc commit to the same branch so it appears on the same PR.
 5. Report back a summary: which files changed, what sections were updated,
    and anything you flagged as needing human review (e.g., a section you
