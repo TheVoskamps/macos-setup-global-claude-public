@@ -443,8 +443,8 @@ github-project:
       kind: number
       id: <field-id>
       default: <number>
-      min: <number>
-      max: <number>
+      min: 1
+      max: 9
   issue-types:
     default: <Type Name>
     <Type Name>: <type-id>
@@ -452,9 +452,18 @@ github-project:
 ```
 
 The wizard today populates `status` (single-select) and `importance`
-(number). Additional slots such as `size` (`kind: label`) are valid
-under the schema but are not yet auto-populated by this wizard; see
-issue #51 for the generic per-slot interview that will cover them.
+(number). For the importance slot, only `default` is captured from the
+user; the renderer emits `min: 1` and `max: 9` as built-in fallbacks
+(literal values, not placeholders) so the rendered block is valid YAML
+out of the box. Additional slots such as `size` (`kind: label`) are
+valid under the schema but are not yet auto-populated by this wizard.
+
+Issue #51 generalizes Step 3b.3 to a per-slot interview that handles
+all kinds. Until #51 lands, the wizard's importance prompt only
+captures `default` (with `min`/`max` rendered as the built-in `1`/`9`
+fallbacks above), and it does not yet auto-populate the `size` slot or
+other future slots or prompt for other kind-specific keys the renderer
+needs. Those will all be prompted by the generalized interview.
 
 Conditional rendering rules:
 

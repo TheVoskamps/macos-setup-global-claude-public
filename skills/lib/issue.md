@@ -192,7 +192,7 @@ all omits it. Verbs that need the slot warn and exit zero in both
 cases. For the `kind: skip` case:
 
 > `warning: slot 'importance' is kind: skip in repo-config.md;`
-> `skipping.`
+> `skipping --importance.`
 
 For the slot-absent case, the warning mentions missing-slot instead
 of `kind: skip`, but the verb's behavior is identical. Document
@@ -227,6 +227,9 @@ hit wins:
 Built-in defaults:
 
 - `--type`       — `Feature`
+<!-- TODO(#52): the built-in default of `3` will become dynamic per-slot
+     when the verb-rewrite sub-issue lands. Currently hardcoded for the
+     importance slot only. -->
 - `--importance` — `3`
 - `--status`     — `Todo`
 - `--assignee`   — the authenticated GitHub user
@@ -638,6 +641,9 @@ Wrap variable parts in backticks.
 
 - **Invalid importance value**
 
+  <!-- TODO(#52): the "1-9" wording will become dynamic per-slot when
+       the verb-rewrite sub-issue lands. Currently hardcoded for the
+       importance slot only. -->
   > importance value `<value>` is not an integer in 1-9. Importance
   > must be an integer between 1 and 9 (inclusive).
 
