@@ -744,14 +744,24 @@ Wrap variable parts in backticks.
   Triggered when the node-ID lookup returns `repository.issue: null`.
   Includes the repo so the user can spot a wrong-repo invocation.
 
-- **Status name not in repo's option map**
+- **Slot value not in options map**
 
-  > status `<name>` not in repo's
-  > `github-project.fields.status.options`. Known options:
-  > `<comma-separated canonical names>`
+  > value `<value>` is not in `<slot>`'s options. Known options:
+  > `<comma-separated canonical names>`.
 
-  The comma-separated list is the canonical names from the map keys,
-  in the order they appear in the YAML.
+  Triggered when a `/issue-set-<slot> N <value>` call resolves a value
+  that does not match (case-insensitively) any entry in
+  `fields.<slot>.options`. Applies to both `kind: single-select` slots
+  (lookup against the option map keys) and `kind: label` slots (lookup
+  against the flat options list). The comma-separated list is the
+  canonical names from the slot's `options`, in the order they appear
+  in the YAML. `<slot>` is the slot name as it appears under `fields:`
+  (e.g. `status`, `size`).
+
+  This is the generic form. The older "Status name not in repo's
+  option map" entry is folded into this one — callers that previously
+  referenced it by name should now reference "Slot value not in options
+  map" instead.
 
 - **No `github-project:` block in repo-config**
 
@@ -795,20 +805,80 @@ Wrap variable parts in backticks.
   `/issue-set-importance` and `/issue-set-status` so the user knows
   the fix is to re-run `/repo-config` rather than to retry blindly.
 
-- **Invalid importance value**
+  Applies only to `kind: number` and `kind: single-select` slots —
+  the kinds whose write path is `updateProjectV2ItemFieldValue` and
+  therefore carries a project field ID. `kind: label` slots have no
+  field ID (the label name is the identifier) and so cannot hit this
+  error; their failure modes are GitHub-side label errors from
+  `gh issue edit`, not project-field errors.
 
-  <!-- TODO(#52): the "1-9" wording will become dynamic per-slot when
-       the verb-rewrite sub-issue lands. Currently hardcoded for the
-       importance slot only. -->
-  > importance value `<value>` is not an integer in 1-9. Importance
-  > must be an integer between 1 and 9 (inclusive).
+- **Slot value out of range**
 
-  Triggered by `/issue-set-importance` (and any future verb that
-  takes an importance argument) for non-integer input (e.g. `3.5`,
-  `three`), out-of-range integers (e.g. `0`, `10`), and empty or
-  missing input. The verb echoes back the offending `<value>`
-  verbatim (or `<empty>` if it was missing) so the user can see
-  what the parser actually received.
+  > value `<value>` for `<slot>` is out of range. Expected an integer
+  > in `[<min>, <max>]`.
+
+  Triggered when `/issue-set-<slot> N <value>` is called against a
+  `kind: number` slot and the parsed value is outside the closed
+  interval defined by `fields.<slot>.min` and `fields.<slot>.max`.
+  Also triggered for non-integer input (e.g. `3.5`, `three`) and for
+  empty or missing input — the verb echoes back the offending
+  `<value>` verbatim (or `<empty>` if it was missing) so the user can
+  see what the parser actually received.
+
+  This is the generic form. The older "Invalid importance value"
+  entry — which hardcoded the `1-9` wording — is folded into this
+  one; the `<min>` and `<max>` come from the slot's own
+  repo-config, so a slot with `min: 0, max: 100` reads `[0, 100]`
+  here rather than `1-9`. Callers that previously referenced
+  "Invalid importance value" by name should now reference "Slot value
+  out of range" instead.
+
+- **Slot kind doesn't match the operation**
+
+  > `/issue-set-<slot>` was called with a number, but this repo's
+  > `<slot>` is configured as `kind: single-select`. Use one of:
+  > `<comma-separated canonical names>`. (Or run `/repo-config` to
+  > reconfigure.)
+
+  Triggered when the verb's input shape doesn't match the configured
+  `kind:` on the slot. The wording above shows the
+  number-vs-single-select direction; symmetric variants exist for the
+  other directions:
+
+  - **single-select-vs-number** (input parses as a number, slot is
+    `kind: single-select`): as shown above.
+  - **number-vs-single-select** (input is a non-numeric name, slot is
+    `kind: number`):
+
+    > `/issue-set-<slot>` was called with the name `<value>`, but
+    > this repo's `<slot>` is configured as `kind: number`. Pass an
+    > integer in `[<min>, <max>]`. (Or run `/repo-config` to
+    > reconfigure.)
+
+  - **label-vs-anything** (slot is `kind: label` but the input shape
+    can't be matched against `options`, or a verb assuming a project
+    field is run against a `kind: label` slot):
+
+    > `/issue-set-<slot>` was called with `<value>`, but this repo's
+    > `<slot>` is configured as `kind: label`. Use one of:
+    > `<comma-separated canonical names>`. (Or run `/repo-config` to
+    > reconfigure.)
+
+  The verb echoes back the offending `<value>` verbatim and names the
+  configured kind so the user can see the mismatch at a glance.
+
+- **Slot not configured**
+
+  > `/issue-set-<slot>` has nothing to do: this repo has no `<slot>`
+  > slot configured. (Run `/repo-config` to add one.)
+
+  Triggered when `fields.<slot>` is absent from the `github-project:`
+  block, **or** the slot is explicitly declared as `kind: skip`. In
+  both cases the verb exits **zero** — this is the warning-and-skip
+  behavior documented under "Graceful degradation when the block is
+  missing", not an error. Mention this entry's exact wording when the
+  verb emits its single warning line so the catalogue and the runtime
+  message stay aligned.
 
 When a command emits multiple warnings in one run (e.g. `--status`
 and `--importance` both skipped because `github-project:` is missing),

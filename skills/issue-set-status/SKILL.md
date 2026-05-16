@@ -47,9 +47,10 @@ the requested status name.
 1. **Resolve the status name to an option ID** per the
    "Name -> ID lookup rules" in `skills/lib/issue.md`. Case-folding
    is applied; whitespace is significant. If the name does not match
-   any key in `fields.status.options`, abort with the "Status name
-   not in repo's option map" error from the catalogue. Capture the
-   canonical capitalization of the matched key for the report-back.
+   any key in `fields.status.options`, abort with the "Slot value not
+   in options map" error from the catalogue (with `<slot>` = `status`).
+   Capture the canonical capitalization of the matched key for the
+   report-back.
 
 2. **Look up the issue node ID and current project item** using the
    node-ID lookup template from `skills/lib/issue.md`. Trim the query
