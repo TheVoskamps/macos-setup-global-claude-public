@@ -327,10 +327,13 @@ it as an argument.
 
 ## GraphQL templates
 
-All templates below are GitHub GraphQL v4 (`gh api graphql`). The
-field names were confirmed by introspection against the live schema.
-To re-verify any input type, run a query of this shape, substituting
-the input type name in the `__type(name: "...")` argument:
+All GraphQL templates below are GitHub GraphQL v4 (`gh api graphql`).
+The `gh issue edit`-based "Label-namespace update" recipe is included
+in this section for proximity to related write paths but is not
+GraphQL. The field names were confirmed by introspection against the
+live schema. To re-verify any input type, run a query of this shape,
+substituting the input type name in the `__type(name: "...")`
+argument:
 
 ```bash
 gh api graphql -f query='
@@ -590,6 +593,11 @@ Inputs to the recipe:
   resolved against `<options>` (case-insensitive match, canonical
   capitalization).
 
+Label-name matching is case-insensitive against `<options>`,
+consistent with GitHub's case-insensitive label-name uniqueness.
+Canonical capitalization for display always comes from the
+`<options>` list, never from the label as stored on the issue.
+
 Procedure:
 
 1. Read the issue's current labels (e.g. via the node-ID lookup
@@ -661,6 +669,12 @@ current value by dispatching on `fields.<slot>.kind`. This section
 documents how to read each kind. None of these branches mutate state
 — for writes, see the templates and recipes in "GraphQL templates".
 
+Note: issue-type display is not covered here. Issue types are not
+modeled as a `fields.<slot>` (they're an issue-level attribute, not
+a project-field-level one). Reading the current issue type uses the
+catch-all "Node-ID lookup by issue number" query's
+`issueType { id name }` field, not a kind-dispatched recipe.
+
 The four kinds are read as follows:
 
 - **`kind: number`** — read from the issue's project item. In the
@@ -690,7 +704,11 @@ The four kinds are read as follows:
   Read the issue's labels (the same source as the
   "Label-namespace update" recipe), filter to labels that both start
   with `<namespace>` **and** strip to an option name that appears in
-  `<options>`. The display rule depends on how many matched:
+  `<options>`. Label-name matching is case-insensitive against
+  `<options>`, consistent with GitHub's case-insensitive label-name
+  uniqueness. Canonical capitalization for display always comes from
+  the `<options>` list, never from the label as stored on the issue.
+  The display rule depends on how many matched:
   - **zero matches** → render `(none)`
   - **exactly one match** → render the option name (without the
     namespace prefix, e.g. `M` not `size:M`)
