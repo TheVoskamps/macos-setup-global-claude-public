@@ -111,6 +111,10 @@ The four kinds:
       max: 9
   ```
 
+  Writes use the `updateProjectV2ItemFieldValue` — number-field
+  template under "GraphQL templates". Reads use the `kind: number`
+  branch of the "Field-value read by kind" recipe.
+
 - **`kind: single-select`** — a single-select project field with an
   `options:` map from canonical option name to option ID. Same shape
   `fields.status` uses, applied uniformly to any slot:
@@ -127,6 +131,12 @@ The four kinds:
         P2: <option-id>
   ```
 
+  Writes use the `updateProjectV2ItemFieldValue` — single-select-field
+  template under "GraphQL templates", regardless of which slot
+  (`status`, `importance`, or any other) carries `kind: single-select`.
+  Reads use the `kind: single-select` branch of the "Field-value read
+  by kind" recipe.
+
 - **`kind: label`** — a label **namespace**, not a project field at
   all. The verb manages the slot by adding/removing labels via
   `gh issue edit --add-label/--remove-label`. Concrete labels are
@@ -142,6 +152,11 @@ The four kinds:
       default: M
       options: [XS, S, M, L, XL]
   ```
+
+  Writes use the "Label-namespace update" recipe under "GraphQL
+  templates" — note that recipe is a `gh issue edit` invocation, not
+  GraphQL. Reads use the `kind: label` branch of the "Field-value
+  read by kind" recipe.
 
 - **`kind: skip`** — the slot is explicitly declared as unused. The
   verb warns and exits zero rather than writing anything. No other
@@ -558,6 +573,69 @@ Note: the `ProjectV2FieldValue` input type uses `singleSelectOptionId`
 (not `optionId`). Don't confuse this with the field-level `optionId`
 returned by reads of `ProjectV2ItemFieldSingleSelectValue`.
 
+### Label-namespace update (`gh issue edit`, not GraphQL)
+
+`kind: label` slots are managed as issue labels, not project fields.
+There is no `updateProjectV2ItemFieldValue` mutation involved — do
+**not** invent one. The write path is a single `gh issue edit`
+invocation that adds the requested label and removes any other
+in-namespace labels from the slot's own `options` list.
+
+Inputs to the recipe:
+
+- `<N>`             — issue number.
+- `<namespace>`     — `fields.<slot>.namespace`, e.g. `size:`.
+- `<options>`       — `fields.<slot>.options`, e.g. `[XS, S, M, L, XL]`.
+- `<requested>`     — the option name the caller wants set, already
+  resolved against `<options>` (case-insensitive match, canonical
+  capitalization).
+
+Procedure:
+
+1. Read the issue's current labels (e.g. via the node-ID lookup
+   query extended with `labels(first: 50) { nodes { name } }`, or
+   `gh issue view <N> --json labels --jq '.labels[].name'`).
+2. Compute the **remove set**: every label of the form
+   `<namespace><option>` for each `<option>` in `<options>` **other
+   than `<requested>`** that is currently present on the issue.
+3. Compute the **add set**: the single label
+   `<namespace><requested>` if it is not already present; otherwise
+   empty.
+4. Call `gh issue edit <N>` once with both deltas:
+
+   ```bash
+   gh issue edit <N> \
+     --add-label    "<add-csv>" \
+     --remove-label "<remove-csv>"
+   ```
+
+   Omit either flag whose set is empty rather than passing it with an
+   empty value. If both sets are empty (the requested option is
+   already set and no other in-namespace labels are present), the
+   verb is a no-op and does not invoke `gh issue edit` at all.
+
+Determinism: sort both sets **alphabetically** before formatting them
+into the comma-separated `--add-label` / `--remove-label` values, so
+repeated invocations against the same starting state produce
+byte-identical `gh` commands. This matters for review of dry-run
+output and for any future test fixtures.
+
+Foreign-label rule: a slot owns **only** the labels it lists in
+`<options>`. Labels in the same namespace but not in `<options>` —
+e.g. `size:XXL` when `options: [XS, S, M, L, XL]` — are
+**left alone**. The remove set is computed by intersecting "labels
+formed from the slot's own `options`" with "labels currently on the
+issue", not by scanning the namespace prefix. This keeps the verb
+safe against hand-applied or legacy labels the repo-config doesn't
+know about.
+
+Multiple in-namespace labels: if the issue currently has more than
+one of the slot's own labels (e.g. both `size:S` and `size:M`), the
+remove set includes all of them except `<requested>`, and they are
+all removed in the same `gh issue edit` call. **Invariant**: after
+the verb runs, at most one of the slot's own labels is set on the
+issue.
+
 ### `updateIssueIssueType` (set issue type)
 
 ```graphql
@@ -575,6 +653,66 @@ mutation($issueId: ID!, $issueTypeId: ID!) {
 type name (e.g. `Bug`, `Feature`) in the `issue-types:` map. To
 **clear** the issue type, pass `issueTypeId: null` (the input field
 is nullable).
+
+## Field-value read by kind
+
+Read-side consumers (`/issue-view` and similar) display a slot's
+current value by dispatching on `fields.<slot>.kind`. This section
+documents how to read each kind. None of these branches mutate state
+— for writes, see the templates and recipes in "GraphQL templates".
+
+The four kinds are read as follows:
+
+- **`kind: number`** — read from the issue's project item. In the
+  `Issue.projectItems(first: N)` payload (see "Node-ID lookup by
+  issue number"), find the node whose `project.id` matches the
+  configured `project-id`, then locate the `fieldValues` entry whose
+  `field.id` matches `fields.<slot>.id` (or, equivalently, whose
+  `field.name` matches the slot's project-field name). Pull the
+  `number` scalar from the `ProjectV2ItemFieldNumberValue` fragment.
+  Display the number as-is. If no `fieldValues` entry exists for
+  that field, the value is unset; render it as `(none)`.
+
+  A more targeted alternative, when the consumer only needs one
+  slot, is `projectItems(first: 10) { nodes { fieldValueByName(name:
+  "<project-field-name>") { ... on ProjectV2ItemFieldNumberValue {
+  number } } } }`. Use whichever fits the calling query — the
+  catch-all template already pulls all `fieldValues` in one shot, so
+  most callers just filter the existing payload.
+
+- **`kind: single-select`** — same project-item lookup as
+  `kind: number`, but read from the
+  `ProjectV2ItemFieldSingleSelectValue` fragment. Display the option
+  `name` (the canonical option label, e.g. `Todo` or `In Progress`).
+  Do not display the `optionId`. If no entry exists, render `(none)`.
+
+- **`kind: label`** — does **not** read from project items at all.
+  Read the issue's labels (the same source as the
+  "Label-namespace update" recipe), filter to labels that both start
+  with `<namespace>` **and** strip to an option name that appears in
+  `<options>`. The display rule depends on how many matched:
+  - **zero matches** → render `(none)`
+  - **exactly one match** → render the option name (without the
+    namespace prefix, e.g. `M` not `size:M`)
+  - **more than one match** → render `(multiple)`
+
+  Read-side is **strictly read-only**: even when more than one
+  in-namespace label is set, the read path does not delete extras.
+  Cleaning that up is the write path's job (the
+  "Label-namespace update" recipe enforces the at-most-one invariant
+  the next time the slot is written). Foreign labels in the
+  namespace that are not in `<options>` are ignored for display
+  purposes, the same way the write path leaves them alone.
+
+- **`kind: skip`** — not displayed at all. The slot is omitted
+  entirely from the rendered output — no row, no `(none)`
+  placeholder, no "slot skipped" notice. Consumers that iterate over
+  `fields:` to build a display should skip slots whose kind is
+  `skip` before they even reach the value-formatting step.
+
+A slot that is **absent entirely** from `fields:` is also not
+displayed, mirroring the slot-absent / `kind: skip` equivalence
+documented under "Graceful degradation".
 
 ## Error message catalogue
 
