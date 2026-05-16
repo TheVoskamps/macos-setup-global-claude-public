@@ -92,9 +92,18 @@ If any are missing, ask before proceeding.
 8. Run the test suite: if tests fail and aren't related to your fixes,
    note it.
 
-9. Commit with an imperative message describing the fixes, ending with:
-   `References: <link-prefix><issue_number>`. NEVER use closing
-   keywords (closes, fixes, resolves) — they auto-close issues.
+9. Commit with an imperative message describing the fixes. NEVER use
+   closing keywords (closes, fixes, resolves) — they auto-close issues.
+
+   `References:` lines on the commit must list only *other* related
+   issues — typically the ones the parent issue itself references. Do
+   NOT include the parent issue (the one being fixed) in `References:`.
+   The PR is the work for that issue; the linkage is already
+   established by branch name and PR title/description. If the parent
+   issue's body references other issues (predecessors, follow-ups,
+   umbrella issues, etc.), add one `References: <link-prefix><M>` line
+   per such issue. If there are no other related issues, omit
+   `References:` entirely.
 
 10. Push the branch (it's already tracking the remote).
 
