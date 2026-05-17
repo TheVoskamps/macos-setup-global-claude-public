@@ -31,7 +31,9 @@ Before doing anything else:
 1. Read `~/.claude/CLAUDE.md` and follow the instructions at the
    top of that file.
 2. Then read this repo's `.claude/rules/repo-config.md` from
-   the worktree root. Parse the YAML front-matter for:
+   the worktree root.
+
+Parse its YAML front-matter for:
 
 - `source-control` (`GitHub` | `CodeCommit`)
 - `issues` (`GitHub` | `Jira`)
