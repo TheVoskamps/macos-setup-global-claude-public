@@ -19,11 +19,13 @@ so the harness creates each one's worktree under `.claude/worktrees/`
 and starts the subagent inside it. You don't manage worktree paths and
 you never pass them in spawn prompts.
 
-Each teammate re-reads `.claude/rules/repo-config.md` from its own
-worktree at the start of every run. Trust them to do their own
-workflow; do not duplicate the agent's own runbook in spawn prompts.
-A spawn prompt is a brief — what to fix, where, and why — not a
-runbook.
+Each teammate, at the start of every run, reads `~/.claude/CLAUDE.md`
+(and iteratively each `@~/` include it references — subagents don't
+get those auto-expanded the way the main session does) and then
+re-reads `.claude/rules/repo-config.md` from its own worktree. Trust
+them to do their own workflow; do not duplicate the agent's own
+runbook in spawn prompts. A spawn prompt is a brief — what to fix,
+where, and why — not a runbook.
 
 ## Invocation
 
