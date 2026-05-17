@@ -296,41 +296,23 @@ Record:
 - The numeric project number and title (for the summary in Step 6;
   these are not written to the file).
 
-### 3b.3 — Discover fields (status and importance)
+### 3b.3 — Discover fields (per-slot interview)
 
-For the chosen project, enumerate fields:
+This step runs the same generic interview once per conceptually-standard
+slot. The slot list is hardcoded: `status`, `importance`, `size`. Making
+the slot list user-configurable is out of scope; a repo that wants a
+different slot (e.g. `priority`) hand-edits the block after the wizard
+runs, per the schema in `skills/lib/issue.md`.
 
-```bash
-gh project field-list <project-number> --owner <owner> --format json
-```
+#### 3b.3.a — Enumerate project fields once
 
-The JSON shape is `{ fields: [ { id, name, type, options? } ] }`,
-where `type` is one of `ProjectV2Field`, `ProjectV2SingleSelectField`,
-`ProjectV2IterationField`, and `options` is present only on
-single-select fields as an array of `{ id, name }`.
-
-**Status field** (strongly recommended if the user chose `Populate` or
-`Update`; can still be skipped via `Skip status field` below, in which
-case `fields.status` is omitted from the block per the rules in 3b.5):
-
-- Find the single-select field named `Status` (case-insensitive). If
-  exactly one match is found, use it. If multiple single-select fields
-  could plausibly be "status" (e.g. `Status`, `State`), present them as
-  options and let the user pick. If none are found, present the
-  available single-select fields plus `Other` (manual entry of field
-  ID) and `Skip status field`.
-- Capture `id` (the `PVTSSF_...` field node ID) and the full list of
-  `options` (each as `{ id, name }`). The option IDs are short hex
-  strings, not `PVT_*` prefixed node IDs — that is correct for
-  single-select option IDs in ProjectV2.
-- Ask the user which option should be the **default status** for new
-  issues. Recommend, in order: the existing block's
-  `fields.status.default` (if it matches one of the current options
-  case-insensitively), then `Todo` (if present), then the first option
-  in the list. Always include an `Other` to free-type one of the
-  enumerated names.
-
-**Importance field** (optional):
+Before asking about any slot, enumerate the project's fields a single
+time and keep the result in memory for the per-slot loop below. The
+goal is one unified list of `(id, name, kind, options?)` tuples where
+`kind` is one of `number` or `single-select` — the only two kinds that
+correspond to project fields. Iteration, text, date, and built-in
+fields (Title, Assignees, Labels, Milestone, etc.) are filtered out:
+they are not surfaceable as slot backings.
 
 Detecting which fields are number-typed is the tricky part. The
 `gh project field-list` JSON returns `type == "ProjectV2Field"` for
@@ -338,55 +320,181 @@ Detecting which fields are number-typed is the tricky part. The
 Labels, Milestone, Repository, Reviewers, Parent issue, Sub-issues
 progress, Estimate, Start date, Target date, Importance, and any
 custom text/number/date field the user has added. The `type`
-discriminator alone is not enough to identify a number field. Use a
-two-probe sequence:
+discriminator alone is not enough to identify a number field. Use the
+GraphQL `dataType` probe as the canonical discriminator:
 
-1. **First probe — `gh project field-list` JSON.** Look for a field
-   whose `name` matches `Importance` (case-insensitive) and whose
-   `type == "ProjectV2Field"`. If exactly one such field exists,
-   propose it. The JSON does not tell you whether it is number-typed,
-   but the name match plus the "not single-select / not iteration"
-   constraint is usually specific enough in practice.
+```bash
+gh api graphql -F number=<project-number> -F owner=<owner> -f query='
+query($owner: String!, $number: Int!) {
+  # Replace `organization(login:)` with `user(login:)` if the owner
+  # is a user account, not an organization.
+  organization(login: $owner) {
+    projectV2(number: $number) {
+      fields(first: 100) {
+        nodes {
+          ... on ProjectV2Field             { id name dataType }
+          ... on ProjectV2SingleSelectField { id name dataType
+            options { id name } }
+          ... on ProjectV2IterationField    { id name dataType }
+        }
+      }
+    }
+  }
+}'
+```
 
-2. **Second probe — GraphQL `dataType` (canonical discriminator).**
-   When the first probe is ambiguous (multiple `ProjectV2Field` fields
-   match `Importance`, or no name match and you need to enumerate all
-   number fields), fall back to the ProjectV2 fields connection over
-   GraphQL, which exposes `dataType`:
+`dataType` is one of `NUMBER`, `TEXT`, `DATE`, `SINGLE_SELECT`,
+`ITERATION`, `TITLE`, `ASSIGNEES`, `LABELS`, `MILESTONE`,
+`REPOSITORY`, `REVIEWERS`, `LINKED_PULL_REQUESTS`, `TRACKS`,
+`TRACKED_BY`.
 
-   ```bash
-   gh api graphql -F number=<project-number> -F owner=<owner> -f query='
-   query($owner: String!, $number: Int!) {
-     organization(login: $owner) {
-       projectV2(number: $number) {
-         fields(first: 100) {
-           nodes {
-             ... on ProjectV2Field          { id name dataType }
-             ... on ProjectV2SingleSelectField { id name dataType }
-             ... on ProjectV2IterationField { id name dataType }
-           }
-         }
-       }
-     }
-   }'
-   ```
+From the response, build two lists for the per-slot loop:
 
-   If the owner is a user (not an org), swap `organization(login:)`
-   for `user(login:)`. `dataType` is one of `NUMBER`, `TEXT`, `DATE`,
-   `SINGLE_SELECT`, `ITERATION`, `TITLE`, `ASSIGNEES`, `LABELS`,
-   `MILESTONE`, `REPOSITORY`, `REVIEWERS`, `LINKED_PULL_REQUESTS`,
-   `TRACKS`, `TRACKED_BY`. Filter to `dataType == "NUMBER"` — this
-   is the canonical discriminator and is unambiguous.
+- **Number fields**: every node with `dataType == "NUMBER"`. Capture
+  `id` (`PVTF_...`) and `name`. No options.
+- **Single-select fields**: every node with `dataType == "SINGLE_SELECT"`.
+  Capture `id` (`PVTSSF_...`), `name`, and the full `options` list
+  (each `{ id, name }`). The option IDs are short hex strings, not
+  `PVT_*`-prefixed node IDs — that is correct for single-select option
+  IDs in ProjectV2.
 
-- If exactly one number field is found (by either probe), propose it.
-  Otherwise present all number fields plus `None / skip importance`.
-- If a field is selected, capture its `id` (`PVTF_...`) and ask the
-  user for a **default importance value** (integer or float). Recommend
-  the existing block's `fields.importance.default` if any, else `3`.
+`gh project field-list <project-number> --owner <owner> --format json`
+also works as a fallback for the name/type pass when the GraphQL probe
+is unavailable, but it cannot distinguish number from text/date and
+does not expose option IDs, so prefer the GraphQL form when both are
+available.
 
-If the user chooses to skip importance, omit the
-`fields.importance` sub-block; the rest of the github-project block
-is still valid.
+#### 3b.3.b — Per-slot interview
+
+Run the **same** four-step procedure once per slot, in this order:
+
+1. **`status`** — strongly recommended. Default-recommendation chain
+   for which kind to pick: a single-select field named `Status`
+   (case-insensitive) if exactly one such field is enumerated.
+2. **`importance`** — optional. Default-recommendation chain for which
+   kind to pick, in this order:
+   1. A **number** field named `Importance` or `Priority`
+      (case-insensitive). If exactly one such field exists, recommend
+      it.
+   2. Otherwise a **single-select** field with the same name. If
+      exactly one such field exists, recommend it.
+   3. Otherwise no auto-recommendation — present the full option set
+      and let the user pick.
+
+   If multiple fields match at the same tier (e.g. both an
+   `Importance` and a `Priority` number field), present all of them as
+   options and let the user pick; do not silently prefer one.
+3. **`size`** — optional. Default-recommendation chain for which kind
+   to pick, in this order:
+   1. A **single-select** field named `Size` or `T-Shirt`
+      (case-insensitive). If exactly one such field exists, recommend
+      it.
+   2. Otherwise a **number** field with the same name. If exactly one
+      such field exists, recommend it.
+   3. Otherwise recommend `kind: label` with namespace `size:` (the
+      built-in fallback for repos with no project field for size).
+
+   If multiple single-select fields match (e.g. both `Size` and
+   `T-Shirt`), present them as options and let the user pick — no
+   auto-recommendation.
+
+For every slot, the procedure is:
+
+##### Step 1 — Show every option the user could pick
+
+Present, in one `AskUserQuestion` call, the full set of choices for
+this slot:
+
+- One option per enumerated **number field** from 3b.3.a (label:
+  `<name> (number field)`).
+- One option per enumerated **single-select field**, with its option
+  list shown inline so the user can see what they would be choosing
+  (label: `<name> (single-select: opt1, opt2, opt3, ...)`). If the
+  inline list would overflow the question UI, truncate with `, ...`
+  after the first few — the user is selecting the field, not the
+  option, so a partial list is enough to disambiguate.
+- One option for **labels**: `As labels (with namespace prefix)` —
+  independent of project fields. This kind corresponds to
+  `kind: label` in the rendered block.
+- One option for **skip**: `None / skip` — slot stays unconfigured
+  and is rendered as `kind: skip`. Per `skills/lib/issue.md`'s "Field
+  kinds" section, an emitted `kind: skip` and a slot-absent entry are
+  intentionally equivalent in verb behavior; the wizard always emits
+  `kind: skip` for visibility. The slot-absent path only occurs when
+  the user never reached the per-slot interview at all (e.g. they
+  chose `Skip` at the block level in Step 3b.1).
+
+Mark the recommended choice with `(Recommended)` in its label per the
+chain above. For `status`, if no `Status`-named single-select field
+exists, fall back to recommending the first single-select field, then
+`None / skip` as a last resort — status is strongly recommended but
+not enforced.
+
+##### Step 2 — Ask the user which to use
+
+Use the option set from Step 1 directly. There is no slot-specific
+override; the user picks one of the enumerated kinds.
+
+##### Step 3 — Follow up based on the user's pick
+
+Dispatch on the chosen kind:
+
+- **Number field** (`kind: number`):
+  - Capture the field `id` (`PVTF_...`) from the enumeration.
+  - Ask for `default` (integer or float). Recommend the existing
+    block's `fields.<slot>.default` if any; otherwise no recommendation.
+  - Ask for `min` (integer or float). Recommend the existing block's
+    `fields.<slot>.min` if any; otherwise no built-in default — the
+    user owns the range.
+  - Ask for `max` (integer or float). Recommend the existing block's
+    `fields.<slot>.max` if any; otherwise no built-in default — the
+    user owns the range.
+
+- **Single-select field** (`kind: single-select`):
+  - Capture the field `id` (`PVTSSF_...`) and the full option
+    name→id map from the enumeration.
+  - Ask which option should be the **default** for new issues. The
+    recommendation chain is slot-aware:
+    - For `status`: the existing block's `fields.status.default` (if
+      it matches one of the current options case-insensitively), then
+      `Backlog` (if present), then the first option in the list.
+    - For other slots: the existing block's `fields.<slot>.default`
+      (if it matches case-insensitively), then the first option in
+      the list.
+  - Always include an `Other` choice to free-type one of the
+    enumerated option names.
+
+- **Labels** (`kind: label`):
+  - Ask for the **namespace prefix**. Recommend `<slot>:` (e.g.
+    `size:` for the `size` slot). Free-text via `Other` for any other
+    value; trailing colon is conventional but not enforced by the
+    wizard.
+  - Ask for the **option list** as a comma-separated string (e.g.
+    `XS, S, M, L, XL`). Recommend the existing block's
+    `fields.<slot>.options` joined back into a comma list if any.
+    Split on commas, trim whitespace from each entry; reject empty
+    entries.
+  - Ask for the **default** option (must be one of the entered
+    options, case-insensitive match against the list). Recommend the
+    existing block's `fields.<slot>.default` if it still matches one
+    of the entered options; otherwise the first entry in the list.
+  - No field `id` is captured — labels are not project fields and
+    the label name is its own identifier.
+
+- **Skip** (`kind: skip`):
+  - Nothing to capture beyond `kind: skip`. The slot is explicitly
+    declared as unused. Verbs that target the slot warn and exit
+    zero per the "Field kinds" section of `skills/lib/issue.md`.
+  - For the `status` slot specifically, `Skip` is allowed but
+    discouraged — surface a brief note to the user that
+    `/issue-set-status` and the `--status` flag will warn-and-skip,
+    then accept the user's choice without re-prompting.
+
+##### Step 4 — Defer rendering to 3b.5
+
+Hold the captured per-slot state in memory. Step 3b.5 assembles all
+slots into the final YAML block once the loop finishes; do not write
+or edit the file from inside this loop.
 
 ### 3b.4 — Discover issue types
 
@@ -421,55 +529,108 @@ then `Feature` (if present), then the first type in the list. Include
 
 ### 3b.5 — Assemble the proposed block
 
-From the captured values, render the YAML block that will be written
-to the file. Use this exact indentation and key order (matching the
-schema in `skills/lib/issue.md`). Every populated slot under `fields:`
-must carry a `kind:` discriminator (`number`, `single-select`,
-`label`, or `skip`) — there is no implicit default and no
-backwards-compat shim for the old `type:` shape:
+From the captured per-slot state in 3b.3.b and the issue-types map in
+3b.4, render the YAML block that will be written to the file. Use the
+exact indentation and key order shown below (matching the schema in
+`skills/lib/issue.md`). Every populated slot under `fields:` carries
+its `kind:` discriminator (`number`, `single-select`, `label`, or
+`skip`) — there is no implicit default and no backwards-compat shim
+for the old `type:` shape.
+
+The renderer is purely a function of the captured state — it never
+invents defaults or substitutes built-in fallbacks for kind-specific
+keys. Every key in the rendered block traces back to a value the user
+either supplied directly (via "Other") or selected from an enumerated
+option in 3b.3.b or 3b.4.
+
+#### Per-kind render shapes
+
+For each populated slot, emit one of the following shapes based on the
+slot's captured `kind`:
+
+- **`kind: number`** — emit `kind`, `id`, `default`, `min`, `max`:
+
+  ```yaml
+  <slot-name>:
+    kind: number
+    id: <field-id>
+    default: <number>
+    min: <number>
+    max: <number>
+  ```
+
+- **`kind: single-select`** — emit `kind`, `id`, `default`, and the
+  option name→id map:
+
+  ```yaml
+  <slot-name>:
+    kind: single-select
+    id: <field-id>
+    default: <option-name>
+    options:
+      <Option Name>: <option-id>
+      ...
+  ```
+
+- **`kind: label`** — emit `kind`, `namespace`, `default`, and the
+  flat option list. No `id` (labels are not project fields). The
+  `namespace` value is double-quoted because trailing-colon strings
+  like `size:` would otherwise be interpreted as a YAML mapping key:
+
+  ```yaml
+  <slot-name>:
+    kind: label
+    namespace: "<namespace>"
+    default: <option-name>
+    options: [<opt1>, <opt2>, ...]
+  ```
+
+- **`kind: skip`** — emit `kind: skip` and nothing else:
+
+  ```yaml
+  <slot-name>:
+    kind: skip
+  ```
+
+#### Full-block shape
+
+The assembled block looks like:
 
 ```yaml
 github-project:
   project-id: <project-id>
   fields:
     status:
-      kind: single-select
-      id: <field-id>
-      default: <option-name>
-      options:
-        <Option Name>: <option-id>
-        ...
+      <per-kind shape from above>
     importance:
-      kind: number
-      id: <field-id>
-      default: <number>
-      min: 1
-      max: 9
+      <per-kind shape from above>
+    size:
+      <per-kind shape from above>
   issue-types:
     default: <Type Name>
     <Type Name>: <type-id>
     ...
 ```
 
-The wizard today populates `status` (single-select) and `importance`
-(number). For the importance slot, only `default` is captured from the
-user; the renderer emits `min: 1` and `max: 9` as built-in fallbacks
-(literal values, not placeholders) so the rendered block is valid YAML
-out of the box. Additional slots such as `size` (`kind: label`) are
-valid under the schema but are not yet auto-populated by this wizard.
+Slot order under `fields:` is fixed: `status`, then `importance`, then
+`size`. The `Update` path re-renders the block from captured state, so
+any hand-edited slot the wizard doesn't know about (e.g. a user-added
+`priority` or `effort` slot) is dropped on the next `Update` run. Only
+`Keep` preserves the block byte-for-byte. Users who hand-edit
+`repo-config.md` to add slots beyond the hardcoded list should pick
+`Keep` on subsequent wizard runs, or accept the rewrite.
 
-Issue #51 generalizes Step 3b.3 to a per-slot interview that handles
-all kinds. Until #51 lands, the wizard's importance prompt only
-captures `default` (with `min`/`max` rendered as the built-in `1`/`9`
-fallbacks above), and it does not yet auto-populate the `size` slot or
-other future slots or prompt for other kind-specific keys the renderer
-needs. Those will all be prompted by the generalized interview.
+#### Conditional rendering rules
 
-Conditional rendering rules:
-
-- Omit `fields.importance` entirely if importance was skipped. If
-  `fields` ends up empty after both importance and status are skipped,
-  omit the `fields:` key entirely.
+- A populated slot with `kind: skip` is still emitted under `fields:`
+  — it is the user's explicit declaration that the slot is unused,
+  which `/issue-*` verbs treat as equivalent to slot-absent but more
+  visible. Only omit a slot entirely if the user never reached the
+  per-slot interview (e.g. the user aborted out of Step 3b before the
+  loop covered that slot).
+- If **all** slots are emitted as `kind: skip` or were never reached,
+  omit the `fields:` key entirely — the block is still valid without
+  it.
 - Omit `issue-types` entirely if issue types were skipped or the repo
   has none enabled.
 - Preserve the case-sensitive option and type names from the GitHub
@@ -485,7 +646,10 @@ Conditional rendering rules:
   — quote the key with double quotes to keep the YAML well-formed.
   The common case (single-word or space-separated names like `In
   Progress`) is fine unquoted, matching the example in
-  `skills/lib/issue.md`.
+  `skills/lib/issue.md`. The same quoting rule applies to label
+  options inside the `kind: label` flat-list shape: if any option
+  contains a YAML-special character or consecutive spaces, quote
+  that individual entry with double quotes inside the `[...]` list.
 
 ### 3b.6 — Skip marker (when the user chose to skip)
 
@@ -668,7 +832,7 @@ github-project:
     status:
       kind: single-select
       id: PVTSSF_lADO...      # single-select field ID
-      default: Todo
+      default: Backlog
       options:
         Backlog:     <option-id>
         Todo:        <option-id>
@@ -693,6 +857,10 @@ github-project:
     Goal:    IT_kwDO...
     Problem: IT_kwDO...
 ```
+
+The `importance` block's `min: 1` / `max: 9` values above are
+illustrative — the wizard prompts the user for those and does not
+auto-fill them.
 
 Keys:
 
@@ -731,13 +899,15 @@ Keys:
   `/issue-create` uses when `--type` is not passed.
 
 The `/repo-config` skill auto-discovers and populates this block
-interactively: pick the project from `gh project list`, then the
-wizard reads the Status field's options, looks for an `Importance`
-number field by convention, and queries the repo's issue types via
-GraphQL. Hand-editing is still supported — the wizard preserves
-existing values as recommended defaults and rewrites the block
-byte-faithfully against the prior literal bytes. See
-`skills/lib/issue.md` for full details on how the block is consumed.
+interactively: pick the project from `gh project list`, then for each
+conceptually-standard slot (`status`, `importance`, `size`) the wizard
+offers every enumerated project field plus a label-namespace option
+and a skip option, and writes `kind:` on every populated slot.
+Issue-types are pulled separately via GraphQL. Hand-editing is still
+supported — the wizard preserves existing values as recommended
+defaults and rewrites the block byte-faithfully against the prior
+literal bytes. See `skills/lib/issue.md` for full details on how the
+block is consumed.
 
 The Jira branch (`issues: Jira`) gets a parallel `jira:` block when
 Jira support is implemented; today, `/issue-*` commands abort under
