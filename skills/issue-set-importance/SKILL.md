@@ -22,8 +22,9 @@ documents only what is specific to `/issue-set-importance`.
   or without a leading `#`.
 - `<1-9>` (required): integer between 1 and 9 inclusive. The command
   does not clamp; any of the three rejection cases below aborts with
-  the "Invalid importance value" error from the catalogue in
-  `skills/lib/issue.md`:
+  the "Slot value out of range" error from the catalogue in
+  `skills/lib/issue.md` (with `<slot>` = `importance`,
+  `<min>` = `1`, `<max>` = `9`):
   - **Non-integer input** — e.g. `3.5`, `three`, anything that does
     not parse as a base-10 integer.
   - **Out-of-range integer** — e.g. `0`, `10`, or any integer outside
