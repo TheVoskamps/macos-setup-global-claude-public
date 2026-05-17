@@ -326,6 +326,8 @@ GraphQL `dataType` probe as the canonical discriminator:
 ```bash
 gh api graphql -F number=<project-number> -F owner=<owner> -f query='
 query($owner: String!, $number: Int!) {
+  # Replace `organization(login:)` with `user(login:)` if the owner
+  # is a user account, not an organization.
   organization(login: $owner) {
     projectV2(number: $number) {
       fields(first: 100) {
@@ -341,11 +343,10 @@ query($owner: String!, $number: Int!) {
 }'
 ```
 
-If the owner is a user (not an org), swap `organization(login:)` for
-`user(login:)`. `dataType` is one of `NUMBER`, `TEXT`, `DATE`,
-`SINGLE_SELECT`, `ITERATION`, `TITLE`, `ASSIGNEES`, `LABELS`,
-`MILESTONE`, `REPOSITORY`, `REVIEWERS`, `LINKED_PULL_REQUESTS`,
-`TRACKS`, `TRACKED_BY`.
+`dataType` is one of `NUMBER`, `TEXT`, `DATE`, `SINGLE_SELECT`,
+`ITERATION`, `TITLE`, `ASSIGNEES`, `LABELS`, `MILESTONE`,
+`REPOSITORY`, `REVIEWERS`, `LINKED_PULL_REQUESTS`, `TRACKS`,
+`TRACKED_BY`.
 
 From the response, build two lists for the per-slot loop:
 
@@ -371,13 +372,31 @@ Run the **same** four-step procedure once per slot, in this order:
    for which kind to pick: a single-select field named `Status`
    (case-insensitive) if exactly one such field is enumerated.
 2. **`importance`** — optional. Default-recommendation chain for which
-   kind to pick: a number field named `Importance` or `Priority`
-   (case-insensitive) if exactly one such field is enumerated;
-   otherwise a single-select field with the same name.
+   kind to pick, in this order:
+   1. A **number** field named `Importance` or `Priority`
+      (case-insensitive). If exactly one such field exists, recommend
+      it.
+   2. Otherwise a **single-select** field with the same name. If
+      exactly one such field exists, recommend it.
+   3. Otherwise no auto-recommendation — present the full option set
+      and let the user pick.
+
+   If multiple fields match at the same tier (e.g. both an
+   `Importance` and a `Priority` number field), present all of them as
+   options and let the user pick; do not silently prefer one.
 3. **`size`** — optional. Default-recommendation chain for which kind
-   to pick: a single-select or number field named `Size` or `T-Shirt`
-   (case-insensitive) if exactly one such field is enumerated;
-   otherwise the `label` kind with a recommended namespace of `size:`.
+   to pick, in this order:
+   1. A **single-select** field named `Size` or `T-Shirt`
+      (case-insensitive). If exactly one such field exists, recommend
+      it.
+   2. Otherwise a **number** field with the same name. If exactly one
+      such field exists, recommend it.
+   3. Otherwise recommend `kind: label` with namespace `size:` (the
+      built-in fallback for repos with no project field for size).
+
+   If multiple single-select fields match (e.g. both `Size` and
+   `T-Shirt`), present them as options and let the user pick — no
+   auto-recommendation.
 
 For every slot, the procedure is:
 
@@ -398,8 +417,12 @@ this slot:
   independent of project fields. This kind corresponds to
   `kind: label` in the rendered block.
 - One option for **skip**: `None / skip` — slot stays unconfigured
-  (rendered as `kind: skip`, or omitted entirely if the user prefers;
-  see Step 3 below).
+  and is rendered as `kind: skip`. Per `skills/lib/issue.md`'s "Field
+  kinds" section, an emitted `kind: skip` and a slot-absent entry are
+  intentionally equivalent in verb behavior; the wizard always emits
+  `kind: skip` for visibility. The slot-absent path only occurs when
+  the user never reached the per-slot interview at all (e.g. they
+  chose `Skip` at the block level in Step 3b.1).
 
 Mark the recommended choice with `(Recommended)` in its label per the
 chain above. For `status`, if no `Status`-named single-select field
@@ -419,12 +442,13 @@ Dispatch on the chosen kind:
 - **Number field** (`kind: number`):
   - Capture the field `id` (`PVTF_...`) from the enumeration.
   - Ask for `default` (integer or float). Recommend the existing
-    block's `fields.<slot>.default` if any; otherwise no recommendation
-    — the user owns the range.
+    block's `fields.<slot>.default` if any; otherwise no recommendation.
   - Ask for `min` (integer or float). Recommend the existing block's
-    `fields.<slot>.min` if any; otherwise no built-in default.
+    `fields.<slot>.min` if any; otherwise no built-in default — the
+    user owns the range.
   - Ask for `max` (integer or float). Recommend the existing block's
-    `fields.<slot>.max` if any; otherwise no built-in default.
+    `fields.<slot>.max` if any; otherwise no built-in default — the
+    user owns the range.
 
 - **Single-select field** (`kind: single-select`):
   - Capture the field `id` (`PVTSSF_...`) and the full option
@@ -589,9 +613,12 @@ github-project:
 ```
 
 Slot order under `fields:` is fixed: `status`, then `importance`, then
-`size`. Future slots added by hand-editing are preserved in their
-original order on update (Step 5b's byte-faithful replacement
-guarantees that).
+`size`. The `Update` path re-renders the block from captured state, so
+any hand-edited slot the wizard doesn't know about (e.g. a user-added
+`priority` or `effort` slot) is dropped on the next `Update` run. Only
+`Keep` preserves the block byte-for-byte. Users who hand-edit
+`repo-config.md` to add slots beyond the hardcoded list should pick
+`Keep` on subsequent wizard runs, or accept the rewrite.
 
 #### Conditional rendering rules
 
@@ -805,7 +832,7 @@ github-project:
     status:
       kind: single-select
       id: PVTSSF_lADO...      # single-select field ID
-      default: Todo
+      default: Backlog
       options:
         Backlog:     <option-id>
         Todo:        <option-id>
@@ -830,6 +857,10 @@ github-project:
     Goal:    IT_kwDO...
     Problem: IT_kwDO...
 ```
+
+The `importance` block's `min: 1` / `max: 9` values above are
+illustrative — the wizard prompts the user for those and does not
+auto-fill them.
 
 Keys:
 
