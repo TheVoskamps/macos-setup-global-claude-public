@@ -18,10 +18,14 @@ call onward. Run all commands as bare commands — `cd` does not persist
 between Bash calls in a subagent context. See `git-workflow.md` →
 "Subagent context" for the full rules.
 
-## Read repo config first
+## Read global rules and repo config first
 
-Before doing anything else, read `.claude/rules/repo-config.md` from
-the worktree root. Parse the YAML front-matter for:
+Before doing anything else:
+
+1. Read `~/.claude/CLAUDE.md` and follow the instructions at the
+   top of that file.
+2. Then read this repo's `.claude/rules/repo-config.md` from
+   the worktree root. Parse the YAML front-matter for:
 
 - `source-control` (`GitHub` | `CodeCommit`)
 - `issues` (`GitHub` | `Jira`)
