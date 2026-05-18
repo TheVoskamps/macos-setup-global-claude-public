@@ -27,11 +27,12 @@ When you stop, report back with:
    not just this one), say so.
 3. **What you would do** if forced to pick. Then ask.
 
-This is distinct from the existing "design decision" rule, which
-covers decisions about the fix you're implementing. THIS rule covers
-decisions about the environment, the tools, and the rules you're
-operating under. Both kinds of decisions deserve escalation; only the
-first was previously named.
+This rule is distinct from the "design decision" escalation rule in
+`agents/issue-developer.md` and `agents/issue-fixer.md`, which covers
+decisions about the fix being implemented. That rule applies only to
+the developer and fixer agents (the ones implementing changes); this
+rule applies to all four agents and to the main session. Both kinds of
+decisions deserve escalation, but they cover different surfaces.
 
 ## What this rule does NOT require
 
