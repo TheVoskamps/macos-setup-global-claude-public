@@ -1,14 +1,39 @@
 ---
 name: git-cleanup-branches-and-worktrees
-description: Clean up merged issue branches and remove stale subagent worktrees from `.claude/worktrees/`.
+description: Clean up merged local branches and remove stale subagent worktrees from `.claude/worktrees/`.
 ---
 
-Please clean up merged issue branches and their worktrees, plus the
-throwaway worktrees that `isolation: worktree` subagents leave behind.
+Please clean up merged local branches (regardless of naming convention)
+and their worktrees, plus the throwaway worktrees that
+`isolation: worktree` subagents leave behind.
+
+### Long-lived branches (referenced from Steps 2 and 8)
+
+These branches are **never** deleted by this skill and are always
+excluded from the merged-branch scan in Step 2. They are also the
+exact set Step 8 pulls forward at the end of the run:
+
+```text
+main, integ, test, sbx-edwin
+```
+
+A repo that uses a different long-lived set should hand-edit this
+list (and the matching list in Step 8) before running the skill.
 
 1. Run `git fetch --all --prune` to refresh tracking branches and remove stale remote refs.
-2. List all local and remote branches matching the pattern `issue-NNN-*`.
-3. For each `issue-NNN-*` branch, determine whether it is safe to delete.
+2. List all local branches **except** the long-lived set above:
+
+   ```bash
+   git for-each-ref --format='%(refname:short)' refs/heads/
+   ```
+
+   Filter out `main`, `integ`, `test`, `sbx-edwin`. The remaining
+   branches are candidates for the gate in Step 3 — this deliberately
+   includes branches that don't match `issue-NNN-*` (e.g.
+   `add-foo-skill`, `fix-bar-allowlist`, `update-settings-permissions`),
+   because the gate (merged PR + remote gone) is the real safety
+   signal, not the name pattern.
+3. For each candidate branch, determine whether it is safe to delete.
    The check is **PR merged AND remote branch is gone** — both must hold.
    "Issue closed and assigned to me" is **not** a sufficient signal: an
    issue can be closed without its PR ever merging, and an unmerged
@@ -22,6 +47,13 @@ throwaway worktrees that `isolation: worktree` subagents leave behind.
    Both conditions must be true:
    - `gh pr list` returns a non-empty result for a merged PR on this branch
    - `git ls-remote --exit-code origin <branch>` exits 2 (branch absent on origin)
+
+   A branch with no merged PR (e.g. a local-only branch you never
+   pushed, or a remote-tracking branch for in-progress work) fails
+   the gate and is left alone. The gate is the safety net; the
+   broadened enumeration in Step 2 just stops the skill from
+   ignoring merged branches that don't happen to start with
+   `issue-`.
 
    **Note on the name-based PR match.** `gh pr list --head <branch>`
    matches by branch *name*, not by SHA. Edge case: a branch was deleted,
@@ -85,8 +117,9 @@ throwaway worktrees that `isolation: worktree` subagents leave behind.
 6. Run `git worktree prune` to clean up any stale worktree references.
 7. Run `git fetch --all --prune` again to refresh tracking branches and
    remove stale remote refs.
-8. For each long-lived branch in `main`, `integ`, `test`, `sbx-edwin`
-   that exists in this repo:
+8. For each long-lived branch in the set defined at the top of this
+   file (`main`, `integ`, `test`, `sbx-edwin`) that exists in this
+   repo:
    a. Check `git worktree list` first. If the target branch is
       currently checked out in another worktree (the harness sometimes
       keeps a worktree on `main`), do **not** `git switch` to it from
@@ -100,7 +133,7 @@ throwaway worktrees that `isolation: worktree` subagents leave behind.
       - `git pull --ff-only`
 
 9. Final summary — report counts:
-   - Issue branches deleted (local + remote)
+   - Merged branches deleted (local + remote)
    - Subagent worktrees removed
    - Worktrees skipped, with reason for each (uncommitted changes,
      unpushed commits, nested worktree, etc.)
