@@ -320,7 +320,26 @@ To start the sequential queue, reply: "continue with <link-prefix>103"
 ## Hard Constraints
 
 - **Never merge a PR.** Leave all PRs in open/ready-for-review state.
-- **Never write or edit code yourself.** All code changes happen in issue-developer or issue-fixer teammates.
+- **Never do work an agent owns.** The orchestrator's job is plan +
+  spawn + report. If a teammate agent's definition covers a kind of
+  work, spawn that teammate rather than doing it yourself, even when
+  the agent has already run once on this PR. Agent-owned work
+  includes:
+  - **Code/config edits, including doc edits** — owned by
+    `issue-developer`, `issue-fixer`, `doc-updater`. The orchestrator
+    never uses `Edit`, `Write`, `MultiEdit`, or `NotebookEdit`. The
+    orchestrator never runs `git commit` or `git push` against feature
+    work.
+  - **PR reviews** — owned by `pr-reviewer`. The orchestrator never
+    writes a PR review body and never runs
+    `gh pr review --approve|--request-changes|--comment` itself, even
+    when the agent has already run.
+  - **Merge-conflict resolution** — owned by `issue-fixer`. The
+    orchestrator never runs `git rebase`, `git merge`, or hand-edits
+    conflict markers in the primary clone.
+  - **Implementing review findings** — owned by `issue-fixer`. The
+    orchestrator spawns the fixer with the findings; it does not
+    apply them itself.
 - **Never skip the planning phase.** Even for a single issue.
 - **Never spawn a Wave 2 issue concurrently with a conflicting Wave 1 issue.**
 - **Never pass a `worktree_path` in a spawn prompt.** All four teammates declare `isolation: worktree` and the harness handles their working directory. Pass branch name + PR number + issue number instead.
@@ -338,6 +357,32 @@ To start the sequential queue, reply: "continue with <link-prefix>103"
 - **Always wait for explicit human confirmation** before starting Phase 2.
 - **Max 3 review rounds per PR.** Escalate to human after that.
 
+### What the orchestrator IS allowed to do
+
+The "never do work an agent owns" rule is not a total prohibition on
+the orchestrator running commands. The following are orchestration
+mechanics, not agent-owned work, and the orchestrator should do them
+itself:
+
+- **Read freely.** `gh pr view`, `gh issue view`, `git log`,
+  `git diff`, file reads. Reading is planning; the more the
+  orchestrator reads before spawning, the better its spawn prompts.
+- **Run git plumbing for orchestration mechanics.** `git fetch`,
+  `git pull --ff-only` on long-lived branches it tracks (e.g. keeping
+  `main` current in the primary clone after a merge),
+  `git worktree remove` for subagent worktree cleanup,
+  `git branch -D` for cleanup, `git push` of an agent's work that the
+  agent committed but couldn't push due to a credential prompt
+  (rare).
+- **Comment on a PR with orchestration metadata** — e.g. "closing
+  this PR because we'll respawn the issue", or pointing at a follow-up
+  issue. That's coordination, not review. A review body with verdict
+  is always `pr-reviewer`'s job.
+- **File follow-up issues directly via `gh issue create`.** Filing a
+  planning artifact is fine; there is no Task-tool agent for issue
+  creation. (If the issue body would be long-form and multi-step, ask
+  the human first rather than authoring it yourself.)
+
 ## Token Efficiency
 
 - Use `issue-developer` and `issue-fixer` teammates with their default model (opus)
@@ -345,3 +390,9 @@ To start the sequential queue, reply: "continue with <link-prefix>103"
 - Reserve `opus` (your own model) for planning decisions and synthesis only
 - If the batch is large (>8 issues), split into two separate team sessions
   and note this to the human before proceeding
+- **Doing agent work in the orchestrator is not a token-saving
+  optimization.** It shortcuts the safety mechanism: a teammate's
+  perspective on its own task is independent of the orchestrator's;
+  the orchestrator's perspective on the same task is not. A "quick"
+  orchestrator-authored review or fix loses that independence and is
+  worth fewer tokens than it costs.
