@@ -3,36 +3,43 @@ name: git-cleanup-branches-and-worktrees
 description: Clean up merged local branches and remove stale subagent worktrees from `.claude/worktrees/`.
 ---
 
+# git-cleanup-branches-and-worktrees
+
 Please clean up merged local branches (regardless of naming convention)
 and their worktrees, plus the throwaway worktrees that
 `isolation: worktree` subagents leave behind.
 
-### Long-lived branches (referenced from Steps 2 and 8)
+## Long-lived branches (referenced from Steps 2 and 9)
 
 These branches are **never** deleted by this skill and are always
 excluded from the merged-branch scan in Step 2. They are also the
-exact set Step 8 pulls forward at the end of the run:
+exact set Step 9 pulls forward at the end of the run:
 
 ```text
 main, integ, test, sbx-edwin
 ```
 
 A repo that uses a different long-lived set should hand-edit this
-list (and the matching list in Step 8) before running the skill.
+single list before running the skill — Steps 2 and 9 both refer
+back to this callout rather than repeating the names.
 
-1. Run `git fetch --all --prune` to refresh tracking branches and remove stale remote refs.
+1. Run `git fetch --all --prune` to refresh tracking branches and
+   remove stale remote refs.
 2. List all local branches **except** the long-lived set above:
 
    ```bash
-   git for-each-ref --format='%(refname:short)' refs/heads/
+   git for-each-ref --format='%(refname:short)' refs/heads/ \
+     | grep -Ev '^(main|integ|test|sbx-edwin)$'
    ```
 
-   Filter out `main`, `integ`, `test`, `sbx-edwin`. The remaining
-   branches are candidates for the gate in Step 3 — this deliberately
-   includes branches that don't match `issue-NNN-*` (e.g.
-   `add-foo-skill`, `fix-bar-allowlist`, `update-settings-permissions`),
-   because the gate (merged PR + remote gone) is the real safety
-   signal, not the name pattern.
+   Filter out the long-lived set above. The remaining branches are
+   candidates for the gate in Step 3 — this deliberately includes
+   branches that don't match `issue-NNN-*` (e.g. `add-foo-skill`,
+   `fix-bar-allowlist`, `update-settings-permissions`), because the
+   gate (merged PR + remote gone) is the real safety signal, not the
+   name pattern. Note: `worktree-*` branches that appear in this
+   enumeration fail Step 3's gate (they have no merged PR) and are
+   handled by Step 5 instead.
 3. For each candidate branch, determine whether it is safe to delete.
    The check is **PR merged AND remote branch is gone** — both must hold.
    "Issue closed and assigned to me" is **not** a sufficient signal: an
@@ -107,19 +114,17 @@ list (and the matching list in Step 8) before running the skill.
       no `--force`) and delete the local branch (`git branch -d`).
       If either check fails: skip and report the reason.
 
-5a. Do **not** auto-clean nested worktrees
-    (`.claude/worktrees/*/.claude/worktrees/`). If any are detected,
-    report them with a note that nested worktrees indicate
-    [Anthropic issue #47548](https://github.com/anthropics/claude-code/issues/47548)
-    (`isolation: worktree` spawned from inside a worktree) and need
-    human inspection. Auto-removing them risks data loss.
-
-6. Run `git worktree prune` to clean up any stale worktree references.
-7. Run `git fetch --all --prune` again to refresh tracking branches and
+6. Do **not** auto-clean nested worktrees
+   (`.claude/worktrees/*/.claude/worktrees/`). If any are detected,
+   report them with a note that nested worktrees indicate
+   [Anthropic issue #47548](https://github.com/anthropics/claude-code/issues/47548)
+   (`isolation: worktree` spawned from inside a worktree) and need
+   human inspection. Auto-removing them risks data loss.
+7. Run `git worktree prune` to clean up any stale worktree references.
+8. Run `git fetch --all --prune` again to refresh tracking branches and
    remove stale remote refs.
-8. For each long-lived branch in the set defined at the top of this
-   file (`main`, `integ`, `test`, `sbx-edwin`) that exists in this
-   repo:
+9. For each long-lived branch in the set defined at the top of this
+   file that exists in this repo:
    a. Check `git worktree list` first. If the target branch is
       currently checked out in another worktree (the harness sometimes
       keeps a worktree on `main`), do **not** `git switch` to it from
@@ -132,12 +137,12 @@ list (and the matching list in Step 8) before running the skill.
       - `git switch <branch-name>`
       - `git pull --ff-only`
 
-9. Final summary — report counts:
-   - Merged branches deleted (local + remote)
-   - Subagent worktrees removed
-   - Worktrees skipped, with reason for each (uncommitted changes,
-     unpushed commits, nested worktree, etc.)
-   - Default branches updated (which ones, which were updated in
-     place via `git -C`)
+10. Final summary — report counts:
+    - Merged branches deleted (local + remote)
+    - Subagent worktrees removed
+    - Worktrees skipped, with reason for each (uncommitted changes,
+      unpushed commits, nested worktree, etc.)
+    - Default branches updated (which ones, which were updated in
+      place via `git -C`)
 
-   List anything that was skipped so the human can investigate.
+    List anything that was skipped so the human can investigate.
