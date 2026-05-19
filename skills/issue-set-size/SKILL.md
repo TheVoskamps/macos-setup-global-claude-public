@@ -1,29 +1,29 @@
 ---
-name: issue-set-importance
-description: Set the importance slot on a single issue, dispatching on the slot's configured kind (number, single-select, label, or skip).
+name: issue-set-size
+description: Set the size slot on a single issue, dispatching on the slot's configured kind (number, single-select, label, or skip).
 ---
 
-Set the importance slot on a single issue. The slot is read from
-`github-project.fields.importance` in `.claude/rules/repo-config.md`;
-the verb dispatches on its `kind:` discriminator and writes via the
+Set the size slot on a single issue. The slot is read from
+`github-project.fields.size` in `.claude/rules/repo-config.md`; the
+verb dispatches on its `kind:` discriminator and writes via the
 matching template/recipe.
 
 See `skills/lib/issue.md` for the shared "Set-slot dispatcher"
 routine, GraphQL templates (number, single-select), the
 "Label-namespace update" recipe, the catalogue error wordings, and
 the slot-absent / `kind: skip` equivalence. This file documents only
-what is specific to `/issue-set-importance`: the slot name
-(`importance`) and the verb-specific echo lines.
+what is specific to `/issue-set-size`: the slot name (`size`) and the
+verb-specific echo lines.
 
 ## Slot
 
-`<slot>` = `importance`. The dispatcher reads
-`github-project.fields.importance` each run.
+`<slot>` = `size`. The dispatcher reads `github-project.fields.size`
+each run.
 
 ## Arguments
 
 ```text
-/issue-set-importance <N> <value>
+/issue-set-size <N> <value>
 ```
 
 - `<N>` (required): issue number in the current repo, with or without
@@ -38,33 +38,33 @@ One fenced example per kind:
   default; the value must be supplied):
 
   ```text
-  /issue-set-importance 123 5
+  /issue-set-size 123 5
   ```
 
 - **`kind: single-select`** — option name from
-  `fields.importance.options`, matched case-insensitively:
+  `fields.size.options`, matched case-insensitively:
 
   ```text
-  /issue-set-importance 123 P1
+  /issue-set-size 123 M
   ```
 
-- **`kind: label`** — option name from `fields.importance.options`
-  (flat list), matched case-insensitively:
+- **`kind: label`** — option name from `fields.size.options` (flat
+  list), matched case-insensitively:
 
   ```text
-  /issue-set-importance 123 High
+  /issue-set-size 123 M
   ```
 
 - **`kind: skip`** or slot absent — any `<value>` is ignored:
 
   ```text
-  /issue-set-importance 123 anything
+  /issue-set-size 123 anything
   ```
 
 ## Execution
 
 Follow the "Set-slot dispatcher" routine in `skills/lib/issue.md`
-with `<slot>` = `importance`. The per-kind write paths
+with `<slot>` = `size`. The per-kind write paths
 (number / single-select / label) and the slot-absent / `kind: skip`
 handling are documented there; do not duplicate them.
 
@@ -78,7 +78,7 @@ The relevant catalogue entries (referenced by name from the lib):
   `kind: label` name didn't match.
 - **Slot kind doesn't match the operation** — input shape doesn't
   match configured kind (e.g. integer passed when slot is
-  `kind: single-select`).
+  `kind: label`).
 - **Slot not configured** — slot is absent or `kind: skip`; exit
   zero with this message.
 - **Project field ID no longer exists on the project** —
@@ -93,27 +93,26 @@ configured `kind:`:
 - **`kind: number`**:
 
   ```text
-  #<N> importance set to <value>.
+  #<N> size set to <value>.
   ```
 
 - **`kind: single-select`**:
 
   ```text
-  #<N> importance set to <CanonicalOption>.
+  #<N> size set to <CanonicalOption>.
   ```
 
-- **`kind: label`** (with `<namespace>` from
-  `fields.importance.namespace`):
+- **`kind: label`** (with `<namespace>` from `fields.size.namespace`):
 
   ```text
-  #<N> importance set to <CanonicalOption> (via label `<namespace><Option>`).
+  #<N> size set to <CanonicalOption> (via label `<namespace><Option>`).
   ```
 
 For `kind: single-select` and `kind: label`, the no-op (idempotent)
 echo uses `already set to` in place of `set to`:
 
-- ``#<N> importance already set to <CanonicalOption>.``
-- ``#<N> importance already set to <CanonicalOption> (via label `<namespace><Option>`).``
+- ``#<N> size already set to <CanonicalOption>.``
+- ``#<N> size already set to <CanonicalOption> (via label `<namespace><Option>`).``
 
 `kind: number` has no pre-check and therefore no `already set to`
 form — the mutation is always invoked.

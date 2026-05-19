@@ -242,9 +242,6 @@ hit wins:
 Built-in defaults:
 
 - `--type`       — `Feature`
-<!-- TODO(#52): the built-in default of `3` will become dynamic per-slot
-     when the verb-rewrite sub-issue lands. Currently hardcoded for the
-     importance slot only. -->
 - `--importance` — `3`
 - `--status`     — `Todo`
 - `--assignee`   — the authenticated GitHub user
@@ -731,6 +728,151 @@ The four kinds are read as follows:
 A slot that is **absent entirely** from `fields:` is also not
 displayed, mirroring the slot-absent / `kind: skip` equivalence
 documented under "Graceful degradation".
+
+## Set-slot dispatcher
+
+`/issue-set-<slot>` verbs (`/issue-set-importance`, `/issue-set-size`,
+and any future per-slot setters like `/issue-set-priority`) share one
+dispatch routine. Each verb's SKILL.md picks a `<slot>` name and then
+follows this routine; the verb-specific files document only their
+slot name, their echo wording, and one fenced argument example per
+kind. The shared logic lives here so it stays in one place.
+
+The verb takes exactly two positional arguments:
+
+```text
+/issue-set-<slot> <N> <value>
+```
+
+- `<N>` (required): issue number, with or without a leading `#`.
+- `<value>` (required): a single token whose parse rules depend on the
+  slot's `kind:` (see below). Multi-word option names must be quoted
+  on the CLI.
+
+### Dispatch routine
+
+1. **Apply tracker dispatch** per "Tracker dispatch" above. Jira
+   aborts with the shared message.
+
+2. **Require `github-project:` block.** If the block is absent, abort
+   with the "No `github-project:` block in repo-config" error from the
+   catalogue. This is an abort, not a warning-and-skip — without the
+   project metadata there is no slot to set.
+
+3. **Re-read `github-project.fields.<slot>`** from
+   `.claude/rules/repo-config.md`. Do not assume it's already in
+   context; verbs in this namespace re-read repo-config every run.
+
+4. **Dispatch on `fields.<slot>.kind`.** The four cases:
+
+   - **slot absent** (no `fields.<slot>` entry) **or `kind: skip`** —
+     emit the "Slot not configured" catalogue message and exit
+     **zero**. Ignore `<value>` entirely; it is not parsed or
+     validated. The two cases are intentionally equivalent (see
+     "Graceful degradation").
+
+   - **`kind: number`** — parse `<value>` as a base-10 integer. If it
+     does not parse, or is outside the closed interval `[min, max]`
+     (using `fields.<slot>.min` and `fields.<slot>.max` when set),
+     abort with the "Slot value out of range" catalogue entry. Then
+     follow the **number write path** below. No idempotency pre-check.
+
+   - **`kind: single-select`** — resolve `<value>` against
+     `fields.<slot>.options` per "Name -> ID lookup rules"
+     (case-insensitive; canonical capitalization from the map). If
+     `<value>` does not match any key, treat as a kind mismatch when
+     the input is numeric-only (surface the "Slot kind doesn't match
+     the operation" catalogue entry, single-select-vs-number variant);
+     otherwise surface the "Slot value not in options map" entry.
+     Then follow the **single-select write path** below, including
+     the pre-check.
+
+   - **`kind: label`** — resolve `<value>` against
+     `fields.<slot>.options` (flat list) case-insensitively; capture
+     canonical capitalization. Same kind-mismatch handling as
+     `single-select` (numeric-only input is "Slot kind doesn't match
+     the operation", label-vs-anything variant). Then follow the
+     **label write path** below, including the pre-check.
+
+### Number write path
+
+1. Look up the issue node ID and current project item via the
+   "Node-ID lookup by issue number" template, trimmed to `id` and the
+   `projectItems` block. If the lookup returns
+   `repository.issue: null`, emit "Issue not found" and abort.
+2. Resolve the project-item ID per "Project-item lookup". If the
+   issue is not on the configured board, call `addProjectV2ItemById`
+   to add it and capture the returned `item.id`.
+3. Call the "`updateProjectV2ItemFieldValue` — number field
+   (importance)" template with `projectId = github-project.project-id`,
+   `itemId = <resolved item id>`,
+   `fieldId = fields.<slot>.id`, and `value = <parsed integer>`.
+4. If the mutation returns a "field not found"-shaped GraphQL error,
+   surface the "Project field ID no longer exists on the project"
+   catalogue entry.
+5. Emit the success echo (verb-specific format).
+
+### Single-select write path
+
+1. Look up the issue node ID, current project item, and current
+   field values via the "Node-ID lookup by issue number" template,
+   trimmed to `id` plus the `projectItems` block (which already
+   includes `fieldValues`). Issue-not-found handling as above.
+2. **Pre-check (idempotency).** Inspect the project item's
+   `fieldValues` for a `ProjectV2ItemFieldSingleSelectValue` whose
+   `field.id` matches `fields.<slot>.id`. If its `name` already
+   equals the requested canonical option name (case-insensitive),
+   print the verb's no-op echo (verb-specific format) and exit zero
+   without calling the mutation.
+3. Resolve the project-item ID per "Project-item lookup". If the
+   issue is not on the configured board, call `addProjectV2ItemById`.
+   (A board-absent issue cannot match the pre-check, so this step
+   only fires when the pre-check missed.)
+4. Call the "`updateProjectV2ItemFieldValue` — single-select field
+   (status)" template with `projectId`, `itemId`, `fieldId`, and
+   `optionId = fields.<slot>.options.<canonical>`.
+5. Stale-field-ID handling as above.
+6. Emit the success echo using the **canonical capitalization** of
+   the matched option key (not whatever casing the caller typed).
+
+### Label write path
+
+1. Read the issue's current labels (e.g. via the node-ID lookup query
+   extended with `labels(first: 50) { nodes { name } }`, or via
+   `gh issue view <N> --json labels --jq '.labels[].name'`).
+   Issue-not-found handling as above.
+2. **Pre-check (idempotency).** Compute the set of currently-present
+   in-namespace labels that map to an option in
+   `fields.<slot>.options` (case-insensitive against `options`). If
+   that set contains exactly the requested label
+   `<namespace><canonical>` and nothing else, print the verb's no-op
+   echo and exit zero without calling `gh issue edit`.
+3. Follow the "Label-namespace update" recipe verbatim — compute the
+   add/remove sets, sort alphabetically, invoke `gh issue edit <N>`
+   once with both flags. Foreign-label and multiple-in-namespace
+   rules from that recipe apply.
+4. Emit the success echo using the canonical capitalization from
+   `options` and the concrete label name
+   (`<namespace><canonical>`).
+
+### Echo formats
+
+Each verb defines its own three echo lines, parameterized by its
+slot name (e.g. `importance`, `size`). The shapes are uniform across
+verbs:
+
+- **`kind: number`** (success):
+  `#<N> <slot> set to <value>.`
+- **`kind: single-select`** (success):
+  `#<N> <slot> set to <CanonicalOption>.`
+- **`kind: single-select`** (no-op):
+  `#<N> <slot> already set to <CanonicalOption>.`
+- **`kind: label`** (success):
+  ``#<N> <slot> set to <CanonicalOption> (via label `<namespace><Option>`).``
+- **`kind: label`** (no-op):
+  ``#<N> <slot> already set to <CanonicalOption> (via label `<namespace><Option>`).``
+
+No trailing URL line — set-slot verbs are terse on success.
 
 ## Error message catalogue
 
