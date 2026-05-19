@@ -109,12 +109,9 @@ refer back to this callout rather than repeating the names.
       was part of the gate).
 
 5. Clean up `isolation: worktree` subagent worktrees and their
-   leftover branch refs. The branch pattern is `worktree-*`, which
-   matches both Claude Code's current `worktree-<adjective>-<noun>`
-   style (e.g. `worktree-bright-running-fox`) **and** the older
-   `worktree-agent-<hash>` style (e.g.
-   `worktree-agent-a84aaa950cf2e17a7`). Both styles can be present
-   in a long-lived repo and both need cleanup.
+   leftover branch refs. Claude Code's `isolation: worktree`
+   produces branch names matching `worktree-*` (e.g.
+   `worktree-agent-a39b0297dc3421b9e`).
 
    Enumerate candidates in two passes:
 
@@ -134,11 +131,10 @@ refer back to this callout rather than repeating the names.
 
    b. **Pass 2 — orphan branch refs with no worktree.** Some
       `worktree-*` branches are left behind as local refs after their
-      worktree was already removed (the harness can leak these,
-      especially with the legacy `worktree-agent-*` naming). Enumerate
-      all local branches matching `worktree-*` that are **not** checked
-      out in any worktree under `.claude/worktrees/`. For each, apply
-      this decision tree:
+      worktree was already removed (the harness can leak these).
+      Enumerate all local branches matching `worktree-*` that are
+      **not** checked out in any worktree under `.claude/worktrees/`.
+      For each, apply this decision tree:
 
       - **Branch has an upstream configured** (`git rev-parse
         --abbrev-ref --symbolic-full-name <branch>@{upstream}` succeeds
