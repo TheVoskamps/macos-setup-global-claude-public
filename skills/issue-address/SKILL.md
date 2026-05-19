@@ -319,7 +319,8 @@ When a teammate escalates:
    in a clean worktree; resume inherits whatever environmental state
    caused the escalation, and `SendMessage` also runs the resumed
    subagent in a way that suppresses surfacing (see "Never run
-   subagents in the background").
+   subagents in the background" below and
+   `~/.claude/rules/foreground-vs-background.md`).
 
 ### Wave sequencing
 
@@ -418,7 +419,12 @@ To start the sequential queue, reply: "continue with <link-prefix>103"
   escalations need to bubble up to the human in real time. This
   covers both `run_in_background: true` on initial spawn AND
   `SendMessage` to resume a previously-paused subagent (both have
-  the same effect of suppressing surfacing).
+  the same effect of suppressing surfacing). See
+  `~/.claude/rules/foreground-vs-background.md` for the canonical
+  rule, including what to do instead when a foreground subagent
+  stops and the human resolves the blocker (orchestrator self-does
+  the plumbing, or spawns a fresh foreground `Agent` with inline
+  resume context — never `SendMessage`).
 - **Never skip the planning phase.** Even for a single issue.
 - **Never spawn a Wave 2 issue concurrently with a conflicting Wave 1
   issue.**
