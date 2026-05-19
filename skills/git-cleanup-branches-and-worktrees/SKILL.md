@@ -1,14 +1,52 @@
 ---
 name: git-cleanup-branches-and-worktrees
-description: Clean up merged issue branches and remove stale subagent worktrees from `.claude/worktrees/`.
+description: Clean up merged local branches and remove stale subagent worktrees from `.claude/worktrees/`.
 ---
 
-Please clean up merged issue branches and their worktrees, plus the
-throwaway worktrees that `isolation: worktree` subagents leave behind.
+# git-cleanup-branches-and-worktrees
 
-1. Run `git fetch --all --prune` to refresh tracking branches and remove stale remote refs.
-2. List all local and remote branches matching the pattern `issue-NNN-*`.
-3. For each `issue-NNN-*` branch, determine whether it is safe to delete.
+Please clean up merged local branches (regardless of naming convention)
+and their worktrees, plus the throwaway worktrees that
+`isolation: worktree` subagents leave behind.
+
+## Long-lived branches (referenced from Steps 2 and 9)
+
+These branches are **never** deleted by this skill and are always
+excluded from the merged-branch scan in Step 2. They are also the
+exact set Step 9 pulls forward at the end of the run:
+
+```text
+main, integ, test, sbx-edwin
+```
+
+A repo that uses a different long-lived set must hand-edit **both**
+the prose list above **and** the matching `grep -Ev` regex in Step
+2's bash snippet below — they must stay in sync, otherwise the
+skill could silently delete a long-lived branch. Concretely: if a
+repo uses `develop` instead of `integ` and only the prose list is
+updated, the regex still excludes `integ` (a branch that doesn't
+exist here) while letting `develop` through Step 2's enumeration as
+a deletion candidate. Steps 2 and 9 both refer back to this callout
+rather than repeating the names.
+
+1. Run `git fetch --all --prune` to refresh tracking branches and
+   remove stale remote refs.
+2. List all local branches **except** the long-lived set above:
+
+   ```bash
+   git for-each-ref --format='%(refname:short)' refs/heads/ \
+     | grep -Ev '^(main|integ|test|sbx-edwin)$'
+   ```
+
+   Filter out the long-lived set above. The remaining branches are
+   candidates for the gate in Step 3 — this deliberately includes
+   branches that don't match `issue-NNN-*` (e.g. `add-foo-skill`,
+   `fix-bar-allowlist`, `update-settings-permissions`), because the
+   gate (merged PR + remote gone) is the real safety signal, not the
+   name pattern. Note: `worktree-*` branches that appear in this
+   enumeration fail Step 3's gate (they have no merged PR) and are
+   handled by Step 5 instead.
+3. For each candidate branch, determine whether it is safe to delete.
    The check is **PR merged AND remote branch is gone** — both must hold.
    "Issue closed and assigned to me" is **not** a sufficient signal: an
    issue can be closed without its PR ever merging, and an unmerged
@@ -22,6 +60,13 @@ throwaway worktrees that `isolation: worktree` subagents leave behind.
    Both conditions must be true:
    - `gh pr list` returns a non-empty result for a merged PR on this branch
    - `git ls-remote --exit-code origin <branch>` exits 2 (branch absent on origin)
+
+   A branch with no merged PR (e.g. a local-only branch you never
+   pushed, or a remote-tracking branch for in-progress work) fails
+   the gate and is left alone. The gate is the safety net; the
+   broadened enumeration in Step 2 just stops the skill from
+   ignoring merged branches that don't happen to start with
+   `issue-`.
 
    **Note on the name-based PR match.** `gh pr list --head <branch>`
    matches by branch *name*, not by SHA. Edge case: a branch was deleted,
@@ -75,18 +120,17 @@ throwaway worktrees that `isolation: worktree` subagents leave behind.
       no `--force`) and delete the local branch (`git branch -d`).
       If either check fails: skip and report the reason.
 
-5a. Do **not** auto-clean nested worktrees
-    (`.claude/worktrees/*/.claude/worktrees/`). If any are detected,
-    report them with a note that nested worktrees indicate
-    [Anthropic issue #47548](https://github.com/anthropics/claude-code/issues/47548)
-    (`isolation: worktree` spawned from inside a worktree) and need
-    human inspection. Auto-removing them risks data loss.
-
-6. Run `git worktree prune` to clean up any stale worktree references.
-7. Run `git fetch --all --prune` again to refresh tracking branches and
+6. Do **not** auto-clean nested worktrees
+   (`.claude/worktrees/*/.claude/worktrees/`). If any are detected,
+   report them with a note that nested worktrees indicate
+   [Anthropic issue #47548](https://github.com/anthropics/claude-code/issues/47548)
+   (`isolation: worktree` spawned from inside a worktree) and need
+   human inspection. Auto-removing them risks data loss.
+7. Run `git worktree prune` to clean up any stale worktree references.
+8. Run `git fetch --all --prune` again to refresh tracking branches and
    remove stale remote refs.
-8. For each long-lived branch in `main`, `integ`, `test`, `sbx-edwin`
-   that exists in this repo:
+9. For each long-lived branch in the set defined at the top of this
+   file that exists in this repo:
    a. Check `git worktree list` first. If the target branch is
       currently checked out in another worktree (the harness sometimes
       keeps a worktree on `main`), do **not** `git switch` to it from
@@ -99,12 +143,12 @@ throwaway worktrees that `isolation: worktree` subagents leave behind.
       - `git switch <branch-name>`
       - `git pull --ff-only`
 
-9. Final summary — report counts:
-   - Issue branches deleted (local + remote)
-   - Subagent worktrees removed
-   - Worktrees skipped, with reason for each (uncommitted changes,
-     unpushed commits, nested worktree, etc.)
-   - Default branches updated (which ones, which were updated in
-     place via `git -C`)
+10. Final summary — report counts:
+    - Merged branches deleted (local + remote)
+    - Subagent worktrees removed
+    - Worktrees skipped, with reason for each (uncommitted changes,
+      unpushed commits, nested worktree, etc.)
+    - Default branches updated (which ones, which were updated in
+      place via `git -C`)
 
-   List anything that was skipped so the human can investigate.
+    List anything that was skipped so the human can investigate.
