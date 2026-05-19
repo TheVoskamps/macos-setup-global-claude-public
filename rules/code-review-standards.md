@@ -14,6 +14,42 @@
 - All API Gateway endpoints must validate request schemas
 - Error responses must not leak internal details
 
+## Repo-Specific: No CodeQL / Code-Quality Scanning (this repo)
+
+This repo (`macos-setup-global-claude`) intentionally does NOT have
+CodeQL or code-quality scanning enabled. The content is markdown
+rules, agent definitions, and skills — there is no compiled or
+interpreted source code for CodeQL to meaningfully analyze, and the
+repo is private and not GHAS-entitled.
+
+The `protect-main` ruleset (id `16051262`) previously included
+`code_scanning` and `code_quality` rule types that required CodeQL /
+code-quality analyses to be uploaded before a PR could merge. No
+such analyses ever arrived, so PRs hung indefinitely on
+"Waiting for Code scanning results" in the GitHub UI (see #91). The
+ruleset was edited to remove those two rule types. The remaining
+rules are still enforced:
+
+```text
+deletion
+non_fast_forward
+pull_request
+required_status_checks
+```
+
+If you want to re-enable scanning later, removing it from the
+ruleset alone is not enough — the right path is to first enable
+GHAS / Code Security on the repo (which costs money on private
+repos) AND add a CodeQL workflow file that actually uploads
+analyses. Adding the ruleset rule without a workflow that produces
+results re-creates the phantom-check problem.
+
+To inspect the live ruleset state, run:
+
+```text
+gh api repos/TheVoskamps/macos-setup-global-claude/rulesets/16051262
+```
+
 ## Cost Optimization
 
 - Lambda memory sized appropriately (test with PowerTuning)
