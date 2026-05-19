@@ -9,25 +9,30 @@ Please clean up merged local branches (regardless of naming convention)
 and their worktrees, plus the throwaway worktrees that
 `isolation: worktree` subagents leave behind.
 
-## Long-lived branches (referenced from Steps 2 and 9)
+## Long-lived branches (referenced from Steps 2, 5, and 9)
 
 These branches are **never** deleted by this skill and are always
-excluded from the merged-branch scan in Step 2. They are also the
-exact set Step 9 pulls forward at the end of the run:
+excluded from the merged-branch scan in Step 2. Step 5's orphan-
+branch reachability check (Pass 2) uses them as the "fully landed"
+yardstick. They are also the exact set Step 9 pulls forward at the
+end of the run:
 
 ```text
 main, integ, test, sbx-edwin
 ```
 
-A repo that uses a different long-lived set must hand-edit **both**
-the prose list above **and** the matching `grep -Ev` regex in Step
-2's bash snippet below — they must stay in sync, otherwise the
-skill could silently delete a long-lived branch. Concretely: if a
-repo uses `develop` instead of `integ` and only the prose list is
-updated, the regex still excludes `integ` (a branch that doesn't
-exist here) while letting `develop` through Step 2's enumeration as
-a deletion candidate. Steps 2 and 9 both refer back to this callout
-rather than repeating the names.
+A repo that uses a different long-lived set must hand-edit **all
+three locations**: the prose list above, the matching `grep -Ev`
+regex in Step 2's bash snippet, **and** the
+`^main ^integ ^test ^sbx-edwin` arguments in Step 5b's
+`git rev-list` invocation. They must stay in sync, otherwise the
+skill could silently delete a long-lived branch or skip an orphan
+ref that is in fact fully landed.
+Concretely: if a repo uses `develop` instead of `integ` and only
+the prose list is updated, the regex still excludes `integ` (a
+branch that doesn't exist here) while letting `develop` through
+Step 2's enumeration as a deletion candidate. Steps 2, 5, and 9 all
+refer back to this callout rather than repeating the names.
 
 1. Run `git fetch --all --prune` to refresh tracking branches and
    remove stale remote refs.
@@ -103,22 +108,66 @@ rather than repeating the names.
       it still exists (defensive — usually it's already gone, which
       was part of the gate).
 
-5. Clean up orphaned `isolation: worktree` subagent worktrees:
-   a. List all worktrees under `.claude/worktrees/` matching the
-      `worktree-*` branch pattern (Claude Code's `isolation: worktree`
-      produces names like `worktree-bright-running-fox` — note the
-      pattern is `worktree-*`, **not** `worktree-agent-*`; the older
-      `agent-` prefix is gone).
-   b. For each `worktree-*` worktree, run the safety check:
+5. Clean up `isolation: worktree` subagent worktrees and their
+   leftover branch refs. Claude Code's `isolation: worktree`
+   produces branch names matching `worktree-*` (e.g.
+   `worktree-agent-a39b0297dc3421b9e`).
+
+   Enumerate candidates in two passes:
+
+   a. **Pass 1 — worktrees that still exist.** List all worktrees
+      under `.claude/worktrees/` whose checked-out branch matches
+      `worktree-*`. For each, run the safety check:
       - no uncommitted changes
       - no unpushed commits relative to `@{upstream}` (the branch's
         own remote tracking ref). Do **not** compare against `main` —
         feature/worktree branches are expected to diverge from `main`;
         what matters is whether the branch is fully pushed to its own
         remote.
+
       If both checks pass: remove the worktree (`git worktree remove`,
       no `--force`) and delete the local branch (`git branch -d`).
       If either check fails: skip and report the reason.
+
+   b. **Pass 2 — orphan branch refs with no worktree.** Some
+      `worktree-*` branches are left behind as local refs after their
+      worktree was already removed (the harness can leak these).
+      Enumerate all local branches matching `worktree-*` that are
+      **not** checked out in any worktree under `.claude/worktrees/`.
+      For each, apply this decision tree:
+
+      - **Branch has an upstream configured** (`git rev-parse
+        --abbrev-ref --symbolic-full-name <branch>@{upstream}` succeeds
+        and the upstream still exists on origin): use the same
+        `@{upstream}..HEAD` empty check as Pass 1. If empty, delete the
+        branch with `git branch -d`. If non-empty, skip and report
+        (the branch holds unpushed work).
+      - **Branch has no upstream configured, or the upstream is gone**
+        (the harness creates these refs but never pushes them, so
+        `@{upstream}..HEAD` fails loudly rather than giving a clean
+        answer): fall back to a reachability check against the
+        long-lived set defined at the top of this file. Concretely:
+
+        ```bash
+        git rev-list <branch> ^main ^integ ^test ^sbx-edwin --count
+        ```
+
+        If the count is `0`, every commit on `<branch>` is already
+        reachable from at least one long-lived branch — the ref is
+        a stale starting point with no unique history, so deleting it
+        loses nothing. Delete with `git branch -D` (the `-D` form is
+        required because the no-upstream state makes `git branch -d`
+        refuse with "not fully merged" even though the commits are in
+        fact reachable from a long-lived branch).
+
+        If the count is non-zero, the branch has commits not on any
+        long-lived branch — skip and report so the human can
+        investigate before any history is dropped.
+
+      If a repo uses a different long-lived set, the
+      `^main ^integ ^test ^sbx-edwin` arguments above are one of the
+      three locations that must be kept in sync — see the
+      "Long-lived branches" callout at the top of this file.
 
 6. Do **not** auto-clean nested worktrees
    (`.claude/worktrees/*/.claude/worktrees/`). If any are detected,
@@ -145,9 +194,14 @@ rather than repeating the names.
 
 10. Final summary — report counts:
     - Merged branches deleted (local + remote)
-    - Subagent worktrees removed
+    - Subagent worktrees removed (Step 5a / Pass 1)
+    - Orphan `worktree-*` branch refs deleted (Step 5b / Pass 2),
+      broken down by which path applied (upstream-empty vs.
+      no-upstream-reachable-from-long-lived-set)
     - Worktrees skipped, with reason for each (uncommitted changes,
       unpushed commits, nested worktree, etc.)
+    - Orphan branch refs skipped, with reason for each (non-zero
+      reachability count, etc.)
     - Default branches updated (which ones, which were updated in
       place via `git -C`)
 
