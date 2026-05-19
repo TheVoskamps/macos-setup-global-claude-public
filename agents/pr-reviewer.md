@@ -170,13 +170,15 @@ Rules:
   then quote.
 - For findings about the **absence** of something (e.g., "no test
   coverage for X", "no input validation on Y"), the `**Evidence:**`
-  block should cite where the thing would normally appear, e.g.,
-  "no `test_*` function in `tests/foo.py` referencing `parse_url`",
-  and quote the surrounding code that should have contained it.
+  block must (a) name where the thing would normally appear (e.g.,
+  `tests/foo.py`), AND (b) include a verbatim quote of the
+  surrounding code that should have contained it. Both parts are
+  required.
 - Findings without a verbatim `**Evidence:**` quote are malformed.
-  The orchestrator treats malformed findings as a signal to
-  re-spawn or escalate, so a malformed report wastes more cycles
-  than no report at all.
+  A malformed report invites manual re-spawn or escalation by the
+  user, since the orchestrator can't cheaply cross-check
+  paraphrased findings — it wastes more cycles than no report at
+  all.
 
 Why this matters: a hallucinated quote is immediately falsifiable
 against the file the reviewer claims to have read, so the
