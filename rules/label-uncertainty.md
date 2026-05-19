@@ -56,9 +56,9 @@ labeling it is enough.
 
 ## Pattern to follow
 
-  Observation: X.
-  Hypothesis (unverified): Y because Z.
-  Test that would confirm/refute: W.
+    Observation: X.
+    Hypothesis (unverified): Y because Z.
+    Test that would confirm/refute: W.
 
 Three lines. The user can choose to run W, accept Y as
 provisional, or wait until you've verified.
