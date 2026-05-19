@@ -143,11 +143,55 @@ In the rest of this document, `<link-prefix>` means the resolved value.
 - IAM least privilege
 - Cost implications (Lambda duration, DynamoDB capacity)
 
+## Findings must quote, not paraphrase
+
+Every finding that references the content of a file, PR body, commit
+message, or code line **must include verbatim quoted evidence** from
+the source. Paraphrasing is forbidden — it has produced fabricated
+findings where the "offending text" the reviewer claimed to see did
+not exist (see #64).
+
+Use this exact format for every finding:
+
+```markdown
+**Finding:** <description>
+**Evidence:** in `<file-or-location>` at <line/section>:
+> <verbatim quote of the offending text>
+**Recommendation:** <what to change>
+```
+
+Rules:
+
+- The line under `**Evidence:**` that starts with `>` must be a
+  byte-for-byte copy of the source text, not a summary, not a
+  reconstruction from memory, and not a "this is roughly what it
+  says" paraphrase. If you cannot produce a verbatim quote, you have
+  not read the source closely enough to file the finding — re-read,
+  then quote.
+- For findings about the **absence** of something (e.g., "no test
+  coverage for X", "no input validation on Y"), the `**Evidence:**`
+  block must (a) name where the thing would normally appear (e.g.,
+  `tests/foo.py`), AND (b) include a verbatim quote of the
+  surrounding code that should have contained it. Both parts are
+  required.
+- Findings without a verbatim `**Evidence:**` quote are malformed.
+  A malformed report invites manual re-spawn or escalation by the
+  user, since the orchestrator can't cheaply cross-check
+  paraphrased findings — it wastes more cycles than no report at
+  all.
+
+Why this matters: a hallucinated quote is immediately falsifiable
+against the file the reviewer claims to have read, so the
+orchestrator can spot-check findings cheaply. A paraphrased finding
+forces the orchestrator to re-do the entire review to verify it,
+defeating the point of delegating review to a subagent.
+
 ## Review Format
 
 - Overall assessment (Approve/Request Changes/Comment)
 - Counts of files changed, changes by file, findings by severity
-- Findings ranked by severity
+- Findings ranked by severity (each finding using the
+  `**Finding:** / **Evidence:** / **Recommendation:**` format above)
 - Specific line-by-line feedback where relevant
 
 ### Findings by Severity
