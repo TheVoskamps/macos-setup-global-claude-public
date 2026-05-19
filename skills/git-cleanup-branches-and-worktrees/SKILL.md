@@ -19,9 +19,15 @@ exact set Step 9 pulls forward at the end of the run:
 main, integ, test, sbx-edwin
 ```
 
-A repo that uses a different long-lived set should hand-edit this
-single list before running the skill — Steps 2 and 9 both refer
-back to this callout rather than repeating the names.
+A repo that uses a different long-lived set must hand-edit **both**
+the prose list above **and** the matching `grep -Ev` regex in Step
+2's bash snippet below — they must stay in sync, otherwise the
+skill could silently delete a long-lived branch. Concretely: if a
+repo uses `develop` instead of `integ` and only the prose list is
+updated, the regex still excludes `integ` (a branch that doesn't
+exist here) while letting `develop` through Step 2's enumeration as
+a deletion candidate. Steps 2 and 9 both refer back to this callout
+rather than repeating the names.
 
 1. Run `git fetch --all --prune` to refresh tracking branches and
    remove stale remote refs.
