@@ -124,15 +124,23 @@ not.
 
 #### Never assert a file lacks content from a partial Read
 
-The `Read` tool returns a window, not the whole file. A file you skimmed at the start of a session may have grown, or you may have only read the first N lines. Before asserting that a file lacks something ("no X block", "X is not configured", "the file doesn't mention Y"):
+The `Read` tool returns a window, not the whole file. A file you skimmed at
+the start of a session may have grown, or you may have only read the first
+N lines. Before asserting that a file lacks something ("no X block", "X is
+not configured", "the file doesn't mention Y"):
 
 1. Check the file's actual length (`wc -l <file>`), OR
 2. Read the file fully (no offset/limit), OR
-3. Run a positive search (`grep -n "^X:" <file>`) — empty result substantiates the negative; a hit means the partial Read missed it.
+3. Run a positive search (`grep -n "^X:" <file>`) — empty result
+   substantiates the negative; a hit means the partial Read missed it.
 
-Positive claims ("found X at line N") need one match. Negative claims ("X is absent") need full coverage. A partial Read can never substantiate a negative.
+Positive claims ("found X at line N") need one match. Negative claims
+("X is absent") need full coverage. A partial Read can never substantiate
+a negative.
 
-This applies doubly to config files that grow over time (`repo-config.md`, `settings.json`, `CLAUDE.md`, `pyproject.toml`, `.env`) — new sections get appended below the part you remember from a prior session.
+This applies doubly to config files that grow over time (`repo-config.md`,
+`settings.json`, `CLAUDE.md`, `pyproject.toml`, `.env`) — new sections get
+appended below the part you remember from a prior session.
 
 ### 4. MARKDOWN WRITING GUIDELINES
 
