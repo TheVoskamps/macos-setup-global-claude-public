@@ -5,8 +5,9 @@ namespace. It is **reference prose**, not an executable script: Claude
 reads it when running any `/issue-*` command and follows the patterns
 documented here. Individual command files (`/issue-create`,
 `/issue-update`, `/issue-view`, `/issue-view-tree`,
-`/issue-set-status`, `/issue-set-importance`, `/issue-set-parent`,
-`/issue-unset-parent`, `/issue-set-child`, `/issue-unset-child`,
+`/issue-set-status`, `/issue-set-importance`, `/issue-set-size`,
+`/issue-set-parent`, `/issue-unset-parent`, `/issue-set-child`,
+`/issue-unset-child`,
 `/issue-sub-list`, `/issue-set-blocked-by`, `/issue-unset-blocked-by`,
 `/issue-set-blocks`, `/issue-unset-blocks`, `/issue-close`,
 `/issue-comment`, etc.) reference this doc rather than duplicating
@@ -989,14 +990,6 @@ Wrap variable parts in backticks.
 
   - **single-select-vs-number** (input parses as a number, slot is
     `kind: single-select`): as shown above.
-  - **number-vs-single-select** (input is a non-numeric name, slot is
-    `kind: number`):
-
-    > `/issue-set-<slot>` was called with the name `<value>`, but
-    > this repo's `<slot>` is configured as `kind: number`. Pass an
-    > integer in `[<min>, <max>]`. (Or run `/repo-config` to
-    > reconfigure.)
-
   - **label-vs-anything** (slot is `kind: label` but the input shape
     can't be matched against `options`, or a verb assuming a project
     field is run against a `kind: label` slot):
@@ -1005,6 +998,15 @@ Wrap variable parts in backticks.
     > `<slot>` is configured as `kind: label`. Use one of:
     > `<comma-separated canonical names>`. (Or run `/repo-config` to
     > reconfigure.)
+
+  Note: there is no `number-vs-single-select` variant for the
+  reverse direction (non-numeric input against a `kind: number`
+  slot). The "Set-slot dispatcher" `kind: number` branch folds **all**
+  non-integer input — including non-numeric names like `three` — into
+  the "Slot value out of range" entry above, which echoes the
+  offending `<value>` verbatim and names the expected
+  `[<min>, <max>]` interval. Do not re-add the variant; route those
+  cases through "Slot value out of range" instead.
 
   The verb echoes back the offending `<value>` verbatim and names the
   configured kind so the user can see the mismatch at a glance.
