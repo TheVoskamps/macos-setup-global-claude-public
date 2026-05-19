@@ -107,8 +107,13 @@ Do not partially implement: no comment, no close, just the abort.
 - **Never close before commenting** when `--comment` was provided.
   Order is comment-then-close so the summary is preserved even if a
   later step fails.
-- **Never use closing keywords in the comment body.** `closes`,
-  `fixes`, `resolves` etc. inside a comment can cascade-close linked
-  issues. If the user-supplied `--comment` contains them, pass it
-  through verbatim — that's their call — but do not add such
-  keywords yourself.
+- **Never place closing keywords adjacent to issue references in the
+  comment body.** A closing keyword (`close`/`closes`/`closed`/
+  `fix`/`fixes`/`fixed`/`resolve`/`resolves`/`resolved`,
+  case-insensitive) **immediately followed by** an issue reference
+  (`#N`, `owner/repo#N`, `GH-N`, or issue URL) inside a comment
+  cascade-closes the referenced issue(s). The same keywords as
+  ordinary English prose with no adjacent issue reference are fine.
+  If the user-supplied `--comment` contains the parser-triggering
+  pattern, pass it through verbatim — that's their call — but do
+  not add such patterns yourself.

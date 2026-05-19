@@ -217,21 +217,44 @@ harness rules that broke the previous patterns no longer apply.
 
 ### Issue References
 
-#### CRITICAL — never use closing keywords
+#### CRITICAL — never use closing keywords adjacent to issue references
 
-When referencing GitHub issues, **never** use keywords that auto-close
-issues:
+GitHub auto-closes an issue when a commit message or PR body contains a
+closing keyword **immediately followed by** an issue reference. The
+forbidden patterns are:
 
-- ❌ Never use: `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`,
-  `resolve`, `resolves`, `resolved`.
-- ❌ These keywords are case-insensitive and will auto-close the
-  referenced issue.
-- ✅ Use a `References: #N` trailer to link *other* related issues
-  (predecessors, follow-ups, umbrella issues, etc.). For multiple,
-  repeat the line.
+- `<keyword> #N`
+- `<keyword> owner/repo#N`
+- `<keyword> GH-N`
+- `<keyword> https://github.com/owner/repo/issues/N`
 
-**Why:** issues should only be closed manually after verification, not
-automatically by commits.
+…where `<keyword>` is any of (case-insensitive): `close`, `closes`,
+`closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved`.
+
+**What this rule prohibits:**
+
+- ❌ `Fixes #123`
+- ❌ `Closes example-org/repo#123`
+- ❌ `Resolves https://github.com/example-org/repo/issues/123`
+- ❌ `Closes Dependabot alert #88` (the parser ignores the
+  "Dependabot alert" prefix and sees `Closes #88`)
+
+**What this rule does NOT prohibit:**
+
+- ✅ The keywords as ordinary English prose with no adjacent issue
+  reference: "Dependency tree after fix", "The fix lands in PR #1070",
+  "This closes a long-standing gap", "Resolved in production".
+- ✅ The keywords inside code blocks, file paths, or identifiers
+  (`fix_bug.py`, `def resolve_path()`).
+
+The auto-close parser is purely syntactic — it looks for the
+keyword-then-reference pattern. Rewriting "Dependency tree after fix"
+to "Dependency tree after patch" is gold-plating, not rule compliance,
+and changes the meaning unnecessarily.
+
+✅ To link *other* related issues (predecessors, follow-ups, umbrella
+issues, etc.) use a `References: #N` trailer. For multiple, repeat the
+line. `References:` is not a closing keyword.
 
 #### CRITICAL — never self-reference the parent issue
 

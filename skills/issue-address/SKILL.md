@@ -435,8 +435,12 @@ To start the sequential queue, reply: "continue with <link-prefix>103"
   etc.). Do NOT include the parent issue (the one being fixed) in
   `References:`. The PR is the work for that issue; the linkage is
   already established by branch name and PR title/description.
-  Closing-keyword prohibition (`Closes:`, `Fixes:`, `Resolves:`)
-  stays as-is — those still auto-close and must never appear.
+  Closing-keyword prohibition stays as-is — a closing keyword
+  (`close`/`closes`/`closed`/`fix`/`fixes`/`fixed`/`resolve`/
+  `resolves`/`resolved`, case-insensitive) **immediately followed by**
+  an issue reference (`#N`, `owner/repo#N`, `GH-N`, or issue URL)
+  auto-closes the referenced issue and must never appear. See
+  `rules/git-workflow.md` → "Issue References" for the full rule.
 - **Never run subagent worktree cleanup in parallel.** Cleanup is
   serial within a wave, per Anthropic issue #48927.
 - **Always wait for explicit human confirmation** before starting

@@ -98,8 +98,14 @@ If any are missing, ask before proceeding.
 8. Run the test suite: if tests fail and aren't related to your fixes,
    note it.
 
-9. Commit with an imperative message describing the fixes. NEVER use
-   closing keywords (closes, fixes, resolves) — they auto-close issues.
+9. Commit with an imperative message describing the fixes. NEVER
+   place a closing keyword (`close`/`closes`/`closed`/`fix`/`fixes`/
+   `fixed`/`resolve`/`resolves`/`resolved`, case-insensitive)
+   immediately before an issue reference (`#N`, `owner/repo#N`,
+   `GH-N`, or an issue URL) — that pattern auto-closes the
+   referenced issue. The keyword as plain English prose with no
+   adjacent issue reference is fine. See `git-workflow.md` → "Issue
+   References" for the full rule.
 
    `References:` lines on the commit must list only *other* related
    issues — typically the ones the parent issue itself references. Do
