@@ -43,11 +43,10 @@ When you need to continue a stopped subagent's work:
 
 ## Why this rule exists separately from "spawn foreground"
 
-The existing rule in `skills/issue-address/SKILL.md` and in the four
-agent definitions says "when spawning teammates, do not run them in
-the background." That rule covers initial spawning. It does NOT cover
-resumption — and resumption via `SendMessage` is the failure mode that
-actually keeps biting.
+The existing rule in `skills/issue-address/SKILL.md` says "when
+spawning teammates, do not run them in the background." That rule
+covers initial spawning. It does NOT cover resumption — and resumption
+via `SendMessage` is the failure mode that actually keeps biting.
 
 ## Scope
 
