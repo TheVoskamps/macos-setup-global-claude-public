@@ -43,22 +43,56 @@ aborts with the shared message.
    subIssues, blockedBy, blocking, issueDependenciesSummary, and
    projectItems with fieldValues).
 
-3. **Resolve project field values.** Scan `projectItems.nodes` for the
-   one whose `project.id` matches `github-project.project-id`. From
-   that item's `fieldValues`:
-   - The `ProjectV2ItemFieldNumberValue` whose field id matches
-     `github-project.fields.importance.id` -> importance number.
-   - The `ProjectV2ItemFieldSingleSelectValue` whose field id matches
-     `github-project.fields.status.id` -> status name (use the
-     value's `name`, which already matches the option label).
+3. **Resolve per-slot field values by `kind:`.** Iterate the
+   `github-project.fields` map in repo-config and, for each slot,
+   dispatch on its `kind:` per the "Field-value read by kind" recipe
+   in `skills/lib/issue.md`. There are exactly four cases:
 
-   If `github-project:` is missing from repo-config, omit the project
-   fields silently per "Graceful degradation" — do not warn; reads
-   degrade quietly.
+   - **`kind: number`** — scan the project item's `fieldValues` for
+     the `ProjectV2ItemFieldNumberValue` whose `field.id` matches
+     `fields.<slot>.id`. Display the `number` as-is. Render `(none)`
+     when the entry is absent.
+   - **`kind: single-select`** — scan the project item's `fieldValues`
+     for the `ProjectV2ItemFieldSingleSelectValue` whose `field.id`
+     matches `fields.<slot>.id`. Display the `name` (the canonical
+     option label, e.g. `P0`, `Backlog`). Render `(none)` when the
+     entry is absent.
+   - **`kind: label`** — does **not** read from `projectItems`. Read
+     the issue's labels (from step 1's `gh issue view --json labels`
+     payload), filter to labels that both start with
+     `fields.<slot>.namespace` **and** strip to an option name that
+     appears in `fields.<slot>.options` (case-insensitive match;
+     canonical capitalization comes from `<options>`). The display
+     depends on how many matched:
+     - **zero matches** → `(none)`
+     - **exactly one match** → the option name without the namespace
+       prefix (e.g. `M`, not `size:M`)
+     - **more than one match** → `(multiple)` — the read path does
+       **not** delete extras; the user runs `/issue-set-<slot>` to
+       converge. The "Label-namespace update" recipe enforces the
+       at-most-one invariant on the next write.
+   - **`kind: skip`** — the slot is omitted entirely from the output.
+     No row, no `(none)` placeholder, no "skipped" notice.
+
+   Slots that are **absent entirely** from `fields:` are also omitted
+   entirely from the output (the same shape as `kind: skip`, per
+   "Graceful degradation" in `skills/lib/issue.md`).
+
+   The list of slots, their canonical names, and the row order in
+   the output are all derived from `fields:` as read from repo-config.
+   This skill hardcodes nothing about which slots exist — a repo that
+   adds e.g. a `priority` slot under any of the four kinds gets a
+   `priority:` row for free.
+
+   If `github-project:` is missing from repo-config, omit the
+   project-fields section entirely per "Graceful degradation" — do
+   not warn; reads degrade quietly.
 
    If the configured project is present but the issue has no item on
-   it, print the project-fields section with each value as `(not on
-   project board)` rather than failing.
+   it, render every `kind: number` and `kind: single-select` slot as
+   `(not on project board)` rather than failing. `kind: label` slots
+   are unaffected by the project-board state — they read from the
+   issue's labels and continue to render normally.
 
 4. **Issue not found**: if the node-ID lookup returns
    `repository.issue: null`, emit the "Issue not found" error from
@@ -69,8 +103,9 @@ aborts with the shared message.
 Print a single block in this order. Sections with no content (no
 labels, no assignees, no parent, empty sub-issues, etc.) are still
 printed with a `(none)` placeholder so the shape is predictable for
-the reader — except project fields when there is no `github-project:`
-block (those are omitted entirely).
+the reader — except project-field rows for slots that are absent or
+`kind: skip` (those are omitted entirely), and the whole
+project-fields group when there is no `github-project:` block.
 
 ```
 #<N> <title>                                       (<state>)
@@ -79,7 +114,8 @@ block (those are omitted entirely).
 Labels:     <comma-separated names>
 Assignees:  <comma-separated logins>
 Type:       <issue-type name>
-Importance: <number>
+Importance: <option name>
+Size:       <option name>
 Status:     <option name>
 
 Parent:     #<N> <title>
@@ -100,12 +136,27 @@ Body:
 <body verbatim>
 ```
 
+The `Importance:`, `Size:`, and `Status:` rows in the block above
+are illustrative — they are the three conceptually-standard slots
+today. The actual rows emitted come from iterating `fields:` in
+repo-config (per step 3) in the order the slots appear in YAML.
+`Size:` is positioned adjacent to `Importance:` when both are
+present. Rows for slots that are absent or `kind: skip` are not
+emitted at all.
+
 When a section has no entries, replace its body with a single
-`(none)` line — for the inline fields (`Labels:` through `Status:`
-and `Parent:`), that means the value column reads `(none)`; for the
-three list sections (`Sub-issues:`, `Blocked by:`, `Blocking:`),
-that means the section header is followed by one `(none)` line at
-the bullet indent instead of any `- #<N>` lines.
+`(none)` line — for the inline fields (`Labels:`, `Assignees:`,
+`Type:`, the per-slot rows, and `Parent:`), that means the value
+column reads `(none)`; for the three list sections (`Sub-issues:`,
+`Blocked by:`, `Blocking:`), that means the section header is
+followed by one `(none)` line at the bullet indent instead of any
+`- #<N>` lines.
+
+`kind: label` slot rows have one additional display state: when
+more than one of the slot's own labels is set on the issue (an
+inconsistent state), the value column reads `(multiple)`. The view
+path does **not** delete the extras — `/issue-view` is read-only.
+The user converges the state with `/issue-set-<slot>`.
 
 The body is printed verbatim, including its own Markdown. Do not
 re-wrap or re-format it.
