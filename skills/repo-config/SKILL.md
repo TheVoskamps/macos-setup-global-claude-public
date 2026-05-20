@@ -814,9 +814,9 @@ time.
 This section is **body-only**; it is not part of the six-key
 front-matter. Add it below the front-matter when the repo has an
 associated GitHub Project V2 board and you want the `/issue-*`
-commands (and `/issue-create`'s `--type` / `--importance` / `--status`
-flags in particular) to resolve human-readable names to the project's
-field IDs and option IDs.
+commands (and `/issue-create`'s `--type` / `--importance` / `--size`
+/ `--status` flags in particular) to resolve human-readable names to
+the project's field IDs and option IDs.
 
 Repos without a project board **omit this block entirely**. The
 `/issue-*` commands degrade gracefully: project-specific flags emit a

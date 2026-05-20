@@ -182,16 +182,18 @@ Repos without a Project V2 board omit the `github-project:` block
 entirely. In that case:
 
 - Commands that only touch the issue itself (`/issue-create` without
-  `--type/--importance/--status`, `/issue-update`, `/issue-close`,
-  `/issue-comment`, `/issue-set-parent`, `/issue-unset-parent`,
-  `/issue-set-child`, `/issue-unset-child`, `/issue-sub-list`,
-  `/issue-set-blocked-by`, `/issue-unset-blocked-by`,
-  `/issue-set-blocks`, `/issue-unset-blocks`, `/issue-view`) work
-  normally — they don't need project metadata.
+  `--type/--importance/--size/--status`, `/issue-update`,
+  `/issue-close`, `/issue-comment`, `/issue-set-parent`,
+  `/issue-unset-parent`, `/issue-set-child`, `/issue-unset-child`,
+  `/issue-sub-list`, `/issue-set-blocked-by`,
+  `/issue-unset-blocked-by`, `/issue-set-blocks`,
+  `/issue-unset-blocks`, `/issue-view`) work normally — they don't
+  need project metadata.
 - Commands or flags that **require** project metadata
-  (`--type`, `--importance`, `--status`, `/issue-set-importance`,
-  `/issue-set-status`) emit a one-line warning and skip that step
-  rather than aborting the whole run. Example:
+  (`--type`, `--importance`, `--size`, `--status`,
+  `/issue-set-importance`, `/issue-set-size`, `/issue-set-status`)
+  emit a one-line warning and skip that step rather than aborting the
+  whole run. Example:
 
   > `warning: no github-project: block in repo-config.md;`
   > `skipping --status. Run /repo-config to add it.`
