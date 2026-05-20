@@ -52,6 +52,13 @@ is a decision-point, not noise to silently solve.
 
 - Project-local installs (`npm install` without `-g`, `pip install` in
   an active venv, `cargo build`). These touch only the worktree.
+  **Subagents are tightened further** by
+  `rules/dependency-discipline.md`: a subagent may run `npm ci` (or
+  the language-equivalent lockfile install) but may NOT run
+  `npm install <pkg>` on its own initiative, because that writes to
+  `package.json` / `package-lock.json` and resolves an undeclared
+  version. The carve-out in this bullet applies to the main session
+  under user direction.
 - Tool invocations the user has explicitly approved for this exact
   command earlier in the same task. (Approval of `brew install foo`
   does NOT extend to `brew install bar` — each host-touching command

@@ -18,5 +18,6 @@ This file provides core guidance to Claude Code across all projects.
 @~/.claude/rules/credential-surfaces.md
 @~/.claude/rules/escalation-discipline.md
 @~/.claude/rules/forbid-host-modifications.md
+@~/.claude/rules/dependency-discipline.md
 @~/.claude/rules/label-uncertainty.md
 @~/.claude/rules/foreground-vs-background.md
