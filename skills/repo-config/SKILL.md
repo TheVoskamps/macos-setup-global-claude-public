@@ -814,9 +814,9 @@ time.
 This section is **body-only**; it is not part of the six-key
 front-matter. Add it below the front-matter when the repo has an
 associated GitHub Project V2 board and you want the `/issue-*`
-commands (and `/issue-create`'s `--type` / `--importance` / `--status`
-flags in particular) to resolve human-readable names to the project's
-field IDs and option IDs.
+commands (and `/issue-create`'s `--type` / `--importance` / `--size`
+/ `--status` flags in particular) to resolve human-readable names to
+the project's field IDs and option IDs.
 
 Repos without a project board **omit this block entirely**. The
 `/issue-*` commands degrade gracefully: project-specific flags emit a
@@ -881,8 +881,14 @@ Keys:
   by `kind: label` (the label name is the identifier) or
   `kind: skip`.
 - **fields.\*.default**: optional per-slot default. Resolution order
-  for any `/issue-*` flag is: CLI flag > this repo-config default >
-  built-in default (Feature / 3 / Todo / current GitHub user).
+  for any `/issue-*` slot flag is: CLI flag > this repo-config
+  default > slot-skip. Slot flags (`--importance`, `--size`,
+  `--status`, etc.) have no built-in default — if neither the CLI
+  flag nor this `default:` is set, the slot is skipped per "Graceful
+  degradation" in `skills/lib/issue.md`. The non-slot built-in
+  defaults (`--type` = `Feature`, `--assignee` = current GitHub user,
+  `--labels` = none, `--parent` = none) still apply to their
+  respective flags.
 - **fields.\<number-slot\>.min / .max**: bounds on a `kind: number`
   slot. Out-of-range values abort the verb cleanly rather than
   writing nonsense to the board.
