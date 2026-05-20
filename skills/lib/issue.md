@@ -236,25 +236,32 @@ hit wins:
 
 1. **CLI flag** explicitly passed on the command line.
 2. **Repo-config default** in the relevant section of the
-   `github-project:` block (`fields.importance.default`,
-   `fields.status.default`, `issue-types.default`).
-3. **Built-in default** (the values below).
+   `github-project:` block (`fields.<slot>.default` for slot flags,
+   `issue-types.default` for `--type`).
+3. **Built-in default** (the values below) — only for flags that
+   have one.
 
 Built-in defaults:
 
 - `--type`       — `Feature`
-- `--importance` — `3`
-- `--status`     — `Todo`
 - `--assignee`   — the authenticated GitHub user
   (`gh api user --jq .login`)
 - `--labels`     — (none)
 - `--parent`     — (none)
 
+Slot flags (`--importance`, `--size`, `--status`, and any future
+per-slot create-time flag) have **no built-in default**. They resolve
+via CLI flag, then `fields.<slot>.default` from repo-config. If
+neither is set — or if the slot is `kind: skip` or absent from
+`fields:` entirely — the slot is skipped (warning-and-skip per
+"Graceful degradation" above). The skill no longer hardcodes
+`3` / `Todo` fallbacks; the slot's own repo-config is authoritative.
+
 A repo-config-level default only applies when its containing block
 exists. If `github-project:` is absent, the built-in default still
-applies for `--type` and `--assignee` and `--labels`, but
-`--importance` and `--status` cannot be set at all (warning-and-skip
-per "Graceful degradation" above).
+applies for `--type`, `--assignee`, and `--labels`, but the slot flags
+cannot be set at all (warning-and-skip per "Graceful degradation"
+above).
 
 ## Name -> ID lookup rules
 
@@ -550,7 +557,8 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
 
 `projectId` and `fieldId` come from the `github-project:` block.
 `itemId` comes from the project-item lookup. `value` is the resolved
-importance (CLI flag, repo-config default, or 3).
+number for the slot (CLI flag or repo-config default — slot flags have
+no built-in default, see "Default-resolution order").
 
 ### `updateProjectV2ItemFieldValue` — single-select field (status)
 
