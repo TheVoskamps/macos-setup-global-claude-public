@@ -237,10 +237,14 @@ For every flag with a default, resolve in this exact order — first
 hit wins:
 
 1. **CLI flag** explicitly passed on the command line.
-2. **Repo-config default** in the relevant section of the
+2. **Interactive prompt** (slot flags only, create-time only — see
+   below). Skipped when the CLI flag is set or when no human is
+   available (e.g. the verb is invoked from a non-interactive
+   harness call).
+3. **Repo-config default** in the relevant section of the
    `github-project:` block (`fields.<slot>.default` for slot flags,
    `issue-types.default` for `--type`).
-3. **Built-in default** (the values below) — only for flags that
+4. **Built-in default** (the values below) — only for flags that
    have one.
 
 Built-in defaults:
@@ -253,17 +257,81 @@ Built-in defaults:
 
 Slot flags (`--importance`, `--size`, `--status`, and any future
 per-slot create-time flag) have **no built-in default**. They resolve
-via CLI flag, then `fields.<slot>.default` from repo-config. If
-neither is set — or if the slot is `kind: skip` or absent from
-`fields:` entirely — the slot is skipped (warning-and-skip per
-"Graceful degradation" above). The skill no longer hardcodes
+via CLI flag, then — for create-time verbs only — an interactive
+prompt (rung 2), then `fields.<slot>.default` from repo-config. If
+none of those produce a value — or if the slot is `kind: skip` or
+absent from `fields:` entirely — the slot is skipped (warning-and-skip
+per "Graceful degradation" above). The skill no longer hardcodes
 `3` / `Todo` fallbacks; the slot's own repo-config is authoritative.
 
 A repo-config-level default only applies when its containing block
 exists. If `github-project:` is absent, the built-in default still
 applies for `--type`, `--assignee`, and `--labels`, but the slot flags
 cannot be set at all (warning-and-skip per "Graceful degradation"
-above).
+above) — no prompt either, because there is nothing to prompt
+against.
+
+### Interactive prompt rung (create-time slot flags)
+
+Rung 2 above applies **only** to slot flags on create-time verbs —
+today, `/issue-create`'s `--importance`, `--size`, and `--status`.
+Set-slot verbs (`/issue-set-importance`, `/issue-set-size`,
+`/issue-set-status`) require an explicit `<value>` positional argument
+and do not prompt. The rationale is that create-time is the moment
+the user is already actively shaping the issue's metadata, so a
+two-or-three-tab prompt is a natural extension; a set-slot verb is a
+targeted edit and would be surprising to gate behind an
+AskUserQuestion call.
+
+The prompt is rendered via the harness's `AskUserQuestion` mechanism,
+mirroring how `/repo-config` interviews the user. Each slot is a
+separate question (so the user can answer them in any order the tool
+presents them) with the slot's full set of options enumerated. The
+**first option** in each question's list is the *recommended* choice
+and carries `(Recommended)` appended to its label.
+
+Per-slot prompt content, by `fields.<slot>.kind`:
+
+- **`kind: single-select`** — the question's options are the keys of
+  `fields.<slot>.options` in YAML order. The recommended option is
+  picked per the per-slot rules below.
+- **`kind: label`** — the question's options are
+  `fields.<slot>.options` (the flat list) in YAML order. The
+  recommended option is picked per the per-slot rules below.
+- **`kind: number`** — render an open-ended prompt that accepts an
+  integer in `[min, max]`. The recommended seed (shown as the
+  prefilled / first option) is picked per the per-slot rules below.
+- **`kind: skip` or slot absent** — no prompt. The slot is
+  warning-skipped per "Graceful degradation" exactly as if the flag
+  were passed and the slot were unconfigured.
+
+Per-slot recommended-option rules (apply on top of the per-kind
+shape above):
+
+- **size** — model evaluates the issue body and proposes a
+  recommendation. See the "Size evaluation heuristic" section in
+  `skills/issue-create/SKILL.md` for the exact heuristic. The
+  model's pick becomes the first option (with `(Recommended)`); the
+  remaining options follow in YAML order with the model's pick
+  removed. For `kind: number`, the model's proposed integer is the
+  seed value. There is no static `default:` fallback in this rung —
+  if the model can't make a useful call, it picks the median option
+  for `kind: single-select` / `kind: label` or the midpoint of
+  `[min, max]` for `kind: number`.
+- **importance** — no model evaluation. The recommended option is
+  `fields.importance.default` from repo-config (if set), echoed back
+  as the first option with `(Recommended)`. If `default:` is absent,
+  no option is recommended; the YAML order stands and the user
+  picks. For `kind: number`, the seed is the `default:` value, or
+  the midpoint of `[min, max]` if no `default:` is set.
+- **status** — same shape as importance. Recommended is
+  `fields.status.default` (typically `Backlog` / `Todo`).
+
+If the user picks an option, that value resolves the slot for the
+rest of the run (as if it had been passed on the CLI). If the
+prompt is unanswered (harness times it out, or the verb is invoked
+from a non-interactive context), fall through to rung 3
+(`fields.<slot>.default`); if that is also absent, warn-and-skip.
 
 ## Name -> ID lookup rules
 

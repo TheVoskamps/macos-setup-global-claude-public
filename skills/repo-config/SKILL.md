@@ -802,10 +802,19 @@ Keys:
   by `kind: label` (the label name is the identifier) or
   `kind: skip`.
 - **fields.\*.default**: optional per-slot default. Resolution order
-  for any `/issue-*` slot flag is: CLI flag > this repo-config
-  default > slot-skip. Slot flags (`--importance`, `--size`,
-  `--status`, etc.) have no built-in default — if neither the CLI
-  flag nor this `default:` is set, the slot is skipped per "Graceful
+  for `/issue-create`'s slot flags (`--importance`, `--size`,
+  `--status`) is: CLI flag > interactive prompt > this repo-config
+  default > slot-skip. The interactive prompt rung shows the user
+  the slot's options with this `default:` as the recommended /
+  first option (or, for `--size`, the model's read of the issue
+  body — see `skills/lib/issue.md` "Interactive prompt rung" and
+  the "Size evaluation heuristic" in
+  `skills/issue-create/SKILL.md`). Set-slot verbs
+  (`/issue-set-importance`, `/issue-set-size`, `/issue-set-status`)
+  do not consult this `default:` — they require an explicit
+  `<value>` positional argument. Slot flags have no built-in
+  default — if none of CLI flag, interactive prompt, or this
+  `default:` produces a value, the slot is skipped per "Graceful
   degradation" in `skills/lib/issue.md`. The non-slot built-in
   defaults (`--type` = `Feature`, `--assignee` = current GitHub user,
   `--labels` = none, `--parent` = none) still apply to their
