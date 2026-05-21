@@ -321,8 +321,8 @@ recommendation.
 - **"Fix typo in README.md"** — triviality marker + 1 file → XS.
 - **"Add a new `--foo` flag to `/issue-create`"** with body listing
   `skills/issue-create/SKILL.md` and `skills/lib/issue.md` and one
-  acceptance bullet — 2 files, 1 item → S - 1 step → XS. (But the
-  XS clamp keeps it at XS.)
+  acceptance bullet — 2 files, 1 item → S - 1 step → XS (XS is the
+  floor).
 - **"Add interactive prompts to `/issue-create`"** (this issue,
   conceptually) — 2 files affected, ~4 acceptance items, "documented
   not prompt-engineered ad-hoc" complexity marker → S → no
