@@ -1,14 +1,26 @@
 ---
 name: repo-config
-description: Interactively create or update `.claude/rules/repo-config.md` by interviewing the user about VCS, issue tracker, and (for GitHub repos) the associated Project V2 board.
+description: Interactively create or fully rewrite `.claude/rules/repo-config.md` by interviewing the user about VCS, issue tracker, and (for GitHub repos) the associated Project V2 board.
 ---
 
-You are running the `/repo-config` skill. Your job is to create or
-update the **target repo's** `.claude/rules/repo-config.md` by
-interviewing the user. This file is read by `/issue-address` and the
-`issue-developer`, `issue-fixer`, `doc-updater`, and `pr-reviewer`
-subagents at the start of every run, so it must be present and well
-formed before any of those flows will work.
+You are running the `/repo-config` skill. Your job is to create the
+**target repo's** `.claude/rules/repo-config.md` from scratch, or to
+fully rewrite it when it already exists, by interviewing the user.
+This file is read by `/issue-address` and the `issue-developer`,
+`issue-fixer`, `doc-updater`, and `pr-reviewer` subagents at the
+start of every run, so it must be present and well formed before
+any of those flows will work.
+
+`/repo-config` does **not** merge with the existing file, retain
+its values as defaults, or rewrite parts of it in place. When the
+file already exists, the user confirms an overwrite up front in
+Step 2.5; the final write in Step 5 replaces the entire file with
+content built from the user's answers in the current run. The
+recommended option for every interview question is the built-in
+default baked into this skill, never a value carried over from the
+prior file. If the user wants the prior file's contents preserved,
+they decline the Step 2.5 overwrite prompt and the file is left
+untouched.
 
 Follow the steps below in order. Do not write the file until the
 user has explicitly approved the proposed content.
@@ -47,102 +59,63 @@ would mis-flag a legitimate repo as "not a repo root".
 Check whether `.claude/rules/repo-config.md` already exists in the
 target repo (relative to the repo root from Step 1).
 
-- **If it exists**: read the file and parse the YAML front-matter
-  (the block delimited by `---` at the top) into the six known keys
-  listed in Step 3. Any value found becomes the **recommended
-  default** for that field's question. Preserve the body of the
-  file (everything after the closing `---`) verbatim — Steps 5 and
-  5b are the only places that may rewrite parts of the file, and
-  each rewrites only its own region.
-- **If it does not exist**: use these built-in defaults:
-  - `source-control`: `GitHub`
-  - `issues`: `GitHub`
-  - `issue-link-prefix`: `#`
-  - `default-issue-source-branch`: `main`
-  - `default-pr-target-branch`: `main`
-  - `issue-branch-naming-prefix`: `none`
+`/repo-config` is a **full-rewrite** tool. It does not parse the
+existing file's values into recommended defaults, and it does not
+preserve the existing body verbatim. The final write in Step 5
+replaces the entire file with content assembled from the user's
+answers in this run. The previous file's content is discarded once
+the user confirms the overwrite in Step 2.5.
 
-If the existing file is malformed (missing front-matter delimiters,
-unparseable YAML, or contains keys you don't recognize), surface
-the problem to the user and ask whether to fall back to built-in
-defaults or stop. Do not attempt to silently "fix" the file.
+- **If it exists**: read the file's full contents into memory so
+  Step 2.5 can display them to the user before they decide whether
+  to overwrite. Do **not** parse the front-matter into recommended
+  defaults. Do **not** scan for a `github-project:` block or skip
+  marker to seed defaults. The bytes are read for display only;
+  they will be discarded if the user confirms overwrite.
+- **If it does not exist**: nothing to read; proceed straight to
+  Step 3.
+
+In both cases, the recommended option for every interview question
+in Step 3 (and Step 3b) is the **built-in default** baked into this
+skill, not anything from the existing file. The built-in front-matter
+defaults are:
+
+- `source-control`: `GitHub`
+- `issues`: `GitHub`
+- `issue-link-prefix`: `#`
+- `default-issue-source-branch`: `main`
+- `default-pr-target-branch`: `main`
+- `issue-branch-naming-prefix`: `none`
 
 Also, before Step 3, gather the local branch list with
 `git branch --format='%(refname:short)'` so you can offer real
 branches as options for the two branch fields.
 
-### Detect existing `github-project:` block
-
-After parsing the front-matter, scan the body (everything after the
-closing front-matter `---`) for a line that starts with
-`github-project:` at column 0. The block runs until the next column-0
-non-blank line (a new top-level body key, a Markdown heading like
-`# ...` or `## ...`, etc.) or EOF. This matches the scan rule in
-`skills/lib/issue.md` so the wizard and the consumers agree on
-boundaries.
-
-If a block is found:
-
-- Capture its **exact literal bytes** — opening `github-project:`
-  line through the last line of the indented block, inclusive, with
-  original line endings and trailing whitespace. Step 5b uses this
-  verbatim as `old_string` if the block is changing.
-- Also capture any **immediately preceding comment lines** that
-  document why the block is present or absent (lines starting with
-  `<!--` ... `-->` or `#` that sit directly above the block with no
-  blank line in between). On a rewrite, treat these as part of the
-  block's region so they don't get orphaned.
-- Parse the indented YAML beneath the `github-project:` key into the
-  schema shown in `skills/lib/issue.md` (project-id, fields,
-  issue-types). Values found here become the **recommended defaults**
-  for the corresponding github-project questions in Step 3b.
-
-If a block is **not** found, also look for a "skip marker" — an HTML
-comment of the exact form:
-
-```text
-<!-- github-project: intentionally omitted; <reason>. -->
-```
-
-If present, treat it as "the user previously chose to skip"; Step 3b
-will recommend `Skip` and surface the prior reason. Capture its
-literal bytes too.
-
-If neither a block nor a skip marker is present, the github-project
-state is "absent" — Step 3b will offer to populate it.
-
-Malformed `github-project:` YAML (unparseable, unknown keys, missing
-required sub-keys) is surfaced the same way as malformed front-matter:
-tell the user and ask whether to discard the block and start over from
-auto-discovery, or stop. Do not silently rewrite a broken block.
-
-## Step 2.5: Confirm intent to edit (existing file only)
+## Step 2.5: Confirm overwrite (existing file only)
 
 This step runs **only if the file existed** in Step 2. If the file
 did not exist, skip directly to Step 3.
 
-Many invocations of `/repo-config` are "just check what's
-configured", not "I want to change something". Walking through the
-six interview questions only to land on "don't change anything" is
-friction. Gate the interview behind a single yes/no so the common
-inspection case exits immediately.
+`/repo-config` rewrites the entire file from the user's answers in
+this run. Before running the interview — which is wasted effort if
+the user actually wanted to inspect, not overwrite — confirm intent
+with a single overwrite prompt.
 
 1. Display the **full current contents** of
    `.claude/rules/repo-config.md` to the user — front-matter and
-   body, byte-for-byte as read from disk. Do not paraphrase, summarize,
-   or show only the front-matter; the user is inspecting the real
-   file.
-2. Ask via `AskUserQuestion`: "Do you want to make changes?" with
-   options `Yes` and `No`.
+   body, byte-for-byte as read from disk. Do not paraphrase or
+   summarize; the user is deciding whether to discard the real file.
+2. Ask via `AskUserQuestion`: "This will replace
+   `.claude/rules/repo-config.md` with a fresh file built from your
+   answers — continue?" with options `Yes` and `No`.
 3. **On `No`**: end the skill cleanly. Report that the file was
    left unchanged at `<repo-root>/.claude/rules/repo-config.md`.
    Do **not** enter the interview. Do **not** write or edit
    anything. Skip Steps 3 through 6.
-4. **On `Yes`**: continue into Step 3 with current values as
-   recommended defaults (the existing behavior).
-
-Do not show a diff at this stage — Step 4 still owns the
-post-interview diff, and there is nothing to diff against yet.
+4. **On `Yes`**: continue into Step 3. From this point on, treat
+   the existing file's contents as discarded — every interview
+   question recommends the **built-in default**, never a value
+   carried over from the prior file.
 
 ## Step 3: Interview
 
@@ -153,8 +126,11 @@ questions per call, and exact grouping is left to your judgment.
 
 For every question:
 
-- The **first option** must be the recommended/current value,
-  with its label suffixed `(Recommended)`.
+- The **first option** must be the recommended value (the built-in
+  default for the field as listed below), with its label suffixed
+  `(Recommended)`. The recommendation never comes from the previous
+  file's contents — even when the file existed, those contents were
+  discarded in Step 2.5.
 - Always include an "Other" option so the user can type a custom
   value.
 - Keep option labels short; put any explanation in the question
@@ -163,37 +139,27 @@ For every question:
 The six fields, in order:
 
 1. **`source-control`** — choose `GitHub` or `CodeCommit`.
-   Recommend whatever the existing file had, otherwise `GitHub`.
-2. **`issues`** — choose `GitHub` or `Jira`. Recommend whatever
-   the existing file had, otherwise `GitHub`.
+   Recommend `GitHub`.
+2. **`issues`** — choose `GitHub` or `Jira`. Recommend `GitHub`.
 3. **`issue-link-prefix`** — the literal string concatenated with
    the issue number in commit messages and PR bodies. The recommended
-   value depends on the **just-chosen** value of `issues` (field 2),
-   not on what the existing file said, because users sometimes
-   re-run this skill specifically to switch issue trackers and the
-   old prefix is then meaningless.
+   value depends on the **just-chosen** value of `issues` (field 2).
    - If the user picked `GitHub` for `issues`, recommend `#`
-     regardless of the existing value. (`#123` is the only sensible
-     GitHub form.)
-   - If the user picked `Jira` for `issues`:
-     - If the existing value ends with a dash and is non-empty (e.g.
-       `SET-`, `PROJ-`), recommend it — it is plausibly a Jira key.
-     - Otherwise (no existing value, or an existing value like `#`
-       carried over from a prior `GitHub` configuration), ignore the
-       existing value and prompt the user to enter the Jira project
-       key plus a trailing dash via "Other" (e.g. `SET-`, `PROJ-`).
-       Do not pre-fill `#` as a recommendation in the Jira case.
+     (`#123` is the only sensible GitHub form).
+   - If the user picked `Jira` for `issues`, do not pre-recommend a
+     value — prompt the user to enter the Jira project key plus a
+     trailing dash via "Other" (e.g. `SET-`, `PROJ-`).
 4. **`default-issue-source-branch`** — branch that new issue work
    branches FROM. Offer the local branches you gathered in Step 2
-   as options, plus "Other" for any branch name. Recommend the
-   existing value if any, otherwise `main`.
+   as options, plus "Other" for any branch name. Recommend `main`
+   if it is present in the local branch list; otherwise present the
+   gathered branches without a recommendation and require the user
+   to pick.
 5. **`default-pr-target-branch`** — branch that issue PRs target.
-   Same option set as field 4. Recommend the existing value if
-   any, otherwise default to whatever the user just chose for
-   `default-issue-source-branch` (often the same).
+   Same option set as field 4. Recommend whatever the user just
+   chose for `default-issue-source-branch` (often the same).
 6. **`issue-branch-naming-prefix`** — branch naming style.
-   Choose one of `none`, `initials`, `name`. Recommend whatever
-   the existing file had, otherwise `none`.
+   Choose one of `none`, `initials`, `name`. Recommend `none`.
 
 Do not validate that the chosen branches actually exist on the
 remote; that is out of scope for this skill.
@@ -207,45 +173,32 @@ project-related values under Jira; the `github-project:` block is a
 GitHub-only concept and the Jira branch will eventually get a parallel
 `jira:` block.
 
-The purpose of this step is to populate (or update, or intentionally
-omit) the `github-project:` body block defined in `skills/lib/issue.md`.
-The block carries project node IDs, status option IDs, and issue type
+The purpose of this step is to populate (or intentionally omit) the
+`github-project:` body block defined in `skills/lib/issue.md`. The
+block carries project node IDs, status option IDs, and issue type
 IDs so the `/issue-*` commands can translate human-readable names
 into the GraphQL IDs the GitHub API requires.
+
+Because `/repo-config` is a full-rewrite tool (see Step 2), this
+step always starts from scratch: any prior `github-project:` block
+or skip marker in the existing file was discarded in Step 2.5.
 
 ### 3b.1 — Decide whether to populate
 
 Use `AskUserQuestion` to ask the user how to handle the
-`github-project:` block. The set of options and the recommended one
-depend on the state captured in Step 2:
+`github-project:` block. Offer two options:
 
-- **Block present** — offer `Keep`, `Update`, `Remove`. Recommend
-  `Keep`.
-- **Skip marker present (no block)** — offer `Skip again`,
-  `Populate`. Recommend `Skip again`.
-- **Neither block nor skip marker (absent)** — offer `Populate`,
-  `Skip`. Recommend `Populate`.
+- **Populate** — recommended. Run auto-discovery (Steps 3b.2 – 3b.5)
+  and build the block from scratch.
+- **Skip** — do not add a block. Write a skip marker instead with a
+  short reason captured via "Other". Skip the rest of Step 3b
+  except 3b.6 (which writes the marker).
 
-Option meanings:
-
-- **Keep**: leave the existing block (and any preceding comments)
-  byte-for-byte. Set the github-project diff to "no change" and exit
-  this step.
-- **Update**: re-run auto-discovery (Steps 3b.2 - 3b.5) using the
-  existing block's values as recommended defaults where applicable.
-  Replace the block on write.
-- **Remove**: delete the block on write and replace it with a skip
-  marker (see 3b.6). Ask for a short free-form reason via "Other".
-- **Populate**: run auto-discovery for the first time. Build the block
-  from scratch.
-- **Skip** / **Skip again**: do not add a block. Write (or keep) the
-  skip marker with a short reason. Recommended reason for "Skip
-  again" is whatever the existing marker said; for first-time "Skip",
-  ask via "Other".
-
-On `Keep` or `Skip again` with no reason change, set the github-project
-diff to "no change" and proceed to Step 4. Otherwise continue with
-3b.2 onward.
+There is no `Keep` / `Update` / `Skip again` option set in this skill:
+the file is being rewritten, so there is no prior block to keep or
+re-update, and no prior skip marker to carry forward. If the user
+wants the previous block back verbatim, they should answer `No` at
+the Step 2.5 overwrite prompt and the file stays untouched.
 
 ### 3b.2 — Pick the owner and project
 
@@ -441,26 +394,21 @@ Dispatch on the chosen kind:
 
 - **Number field** (`kind: number`):
   - Capture the field `id` (`PVTF_...`) from the enumeration.
-  - Ask for `default` (integer or float). Recommend the existing
-    block's `fields.<slot>.default` if any; otherwise no recommendation.
-  - Ask for `min` (integer or float). Recommend the existing block's
-    `fields.<slot>.min` if any; otherwise no built-in default — the
-    user owns the range.
-  - Ask for `max` (integer or float). Recommend the existing block's
-    `fields.<slot>.max` if any; otherwise no built-in default — the
-    user owns the range.
+  - Ask for `default` (integer or float). No built-in recommendation
+    — the user owns the value.
+  - Ask for `min` (integer or float). No built-in recommendation —
+    the user owns the range.
+  - Ask for `max` (integer or float). No built-in recommendation —
+    the user owns the range.
 
 - **Single-select field** (`kind: single-select`):
   - Capture the field `id` (`PVTSSF_...`) and the full option
     name→id map from the enumeration.
   - Ask which option should be the **default** for new issues. The
     recommendation chain is slot-aware:
-    - For `status`: the existing block's `fields.status.default` (if
-      it matches one of the current options case-insensitively), then
-      `Backlog` (if present), then the first option in the list.
-    - For other slots: the existing block's `fields.<slot>.default`
-      (if it matches case-insensitively), then the first option in
-      the list.
+    - For `status`: `Backlog` if present (case-insensitive), then
+      the first option in the list.
+    - For other slots: the first option in the list.
   - Always include an `Other` choice to free-type one of the
     enumerated option names.
 
@@ -470,14 +418,12 @@ Dispatch on the chosen kind:
     value; trailing colon is conventional but not enforced by the
     wizard.
   - Ask for the **option list** as a comma-separated string (e.g.
-    `XS, S, M, L, XL`). Recommend the existing block's
-    `fields.<slot>.options` joined back into a comma list if any.
-    Split on commas, trim whitespace from each entry; reject empty
-    entries.
+    `XS, S, M, L, XL`). No built-in recommendation — the user owns
+    the list. Split on commas, trim whitespace from each entry;
+    reject empty entries.
   - Ask for the **default** option (must be one of the entered
-    options, case-insensitive match against the list). Recommend the
-    existing block's `fields.<slot>.default` if it still matches one
-    of the entered options; otherwise the first entry in the list.
+    options, case-insensitive match against the list). Recommend
+    the first entry in the list.
   - No field `id` is captured — labels are not project fields and
     the label name is its own identifier.
 
@@ -523,9 +469,8 @@ without issue types enabled), ask the user whether to:
 - `Other` — manually enter `Name: IT_...` pairs.
 
 Ask the user which type should be the **default**. Recommend, in
-order: the existing block's `issue-types.default` (if still valid),
-then `Feature` (if present), then the first type in the list. Include
-`Other` for free-type.
+order: `Feature` (if present, case-insensitive), then the first
+type in the list. Include `Other` for free-type.
 
 ### 3b.5 — Assemble the proposed block
 
@@ -612,13 +557,13 @@ github-project:
     ...
 ```
 
-Slot order under `fields:` is fixed: `status`, then `importance`, then
-`size`. The `Update` path re-renders the block from captured state, so
-any hand-edited slot the wizard doesn't know about (e.g. a user-added
-`priority` or `effort` slot) is dropped on the next `Update` run. Only
-`Keep` preserves the block byte-for-byte. Users who hand-edit
-`repo-config.md` to add slots beyond the hardcoded list should pick
-`Keep` on subsequent wizard runs, or accept the rewrite.
+Slot order under `fields:` is fixed: `status`, then `importance`,
+then `size`. Because `/repo-config` is a full-rewrite tool, the
+emitted block is exactly what this run's auto-discovery produced —
+any hand-edited slot the wizard doesn't know about (e.g. a
+user-added `priority` or `effort` slot) is dropped. Users who want
+to preserve hand-edited slots should decline the Step 2.5 overwrite
+prompt and hand-edit instead.
 
 #### Conditional rendering rules
 
@@ -653,105 +598,82 @@ any hand-edited slot the wizard doesn't know about (e.g. a user-added
 
 ### 3b.6 — Skip marker (when the user chose to skip)
 
-When the user chose `Skip`, `Skip again`, or `Remove`, do not write a
-`github-project:` block. Instead, plan to write a single-line HTML
-comment of the exact form:
+When the user chose `Skip` in 3b.1, do not write a `github-project:`
+block. Instead, plan to write a single-line HTML comment of the
+exact form:
 
 ```text
 <!-- github-project: intentionally omitted; <reason>. -->
 ```
 
-Place the comment where the block would have gone (see Step 5b for the
-insertion rule). Use the reason captured from the user (free-text
-trimmed to a single line, period appended if missing). On `Skip again`
-with no reason change, keep the existing marker verbatim.
+Place the comment where the block would have gone (see Step 5's
+compose order). Use the reason captured from the user (free-text
+trimmed to a single line, period appended if missing).
 
-The skip marker is what makes `/repo-config` re-runs idempotent for
-repos that legitimately have no project board: Step 2 detects it,
-3b.1 recommends `Skip again`, and the user is not re-asked to
-auto-discover something that doesn't exist.
+The skip marker documents the deliberate omission so anyone reading
+the file later knows it was a choice, not an oversight. Subsequent
+`/repo-config` runs do not read it as a default — the file is
+rewritten from scratch every time — but the next user inspecting
+the file via Step 2.5's display will see the prior reason and can
+re-enter it if they choose `Skip` again.
 
 ## Step 4: Show the proposed file and wait for approval
 
-Render the resolved YAML front-matter to the user **before** writing
-anything. Format it exactly as it will appear in the file:
+Render the **full file** that will be written, exactly as it will
+appear on disk. This applies equally to the new-file case and the
+overwrite case — there is no diff path, because Step 5 always
+performs a full-file write and discards the previous contents.
 
-```yaml
----
-source-control: <value>
-issues: <value>
-issue-link-prefix: "<value>"
-default-issue-source-branch: <value>
-default-pr-target-branch: <value>
-issue-branch-naming-prefix: <value>
----
-```
+Compose the preview in the same order Step 5 will write it:
 
-Note: `issue-link-prefix` is always quoted because values like `#`
-are otherwise interpreted as a YAML comment.
+1. The resolved YAML front-matter (the canonical six-key block):
 
-- If the file does **not** exist, also show the prose body that
-  will be written below the front-matter (see Step 5 for the body
-  text).
-- If the file **does** exist, show a clear diff of the front-matter
-  fields that are changing. Use exactly this format — one line per
-  changed field, with the key, the literal arrow ` -> `, and the
-  new value rendered the way it will appear in the file (quoted for
-  `issue-link-prefix`, bare for everything else):
+   ```yaml
+   ---
+   source-control: <value>
+   issues: <value>
+   issue-link-prefix: "<value>"
+   default-issue-source-branch: <value>
+   default-pr-target-branch: <value>
+   issue-branch-naming-prefix: <value>
+   ---
+   ```
 
-  ```text
-  Changes:
-    issues: GitHub -> Jira
-    issue-link-prefix: "#" -> "SET-"
-    default-pr-target-branch: main -> release
-  ```
+   Note: `issue-link-prefix` is always quoted because values like
+   `#` are otherwise interpreted as a YAML comment.
 
-  List only fields whose value actually changed.
+2. A blank line.
 
-### GitHub Project block diff
+3. **If Step 3b produced a `github-project:` block** (user chose
+   `Populate`): the rendered block from 3b.5, followed by a blank
+   line. **If Step 3b produced a skip marker** (user chose `Skip`):
+   the single-line HTML comment from 3b.6, followed by a blank line.
+   **If Step 3b did not run** (Jira branch): no extra content here.
 
-If Step 3b ran (i.e. `issues == GitHub`), also show what is happening
-to the `github-project:` body region. Pick the wording that matches
-the planned outcome:
-
-- **No change** (the user chose `Keep`, or chose `Skip again` and
-  kept the existing reason): "No `github-project:` change."
-- **Add** (no prior block, user populated): show the full proposed
-  YAML block exactly as it will appear in the file (the rendered
-  block from Step 3b.5), prefixed with the line "Add
-  `github-project:` block:".
-- **Update** (prior block, user re-discovered): show a unified diff
-  of the prior block (literal bytes from Step 2) vs. the proposed
-  block, prefixed with "Update `github-project:` block:". For large
-  option/type maps, a per-line diff is fine; do not try to be clever.
-- **Remove** (prior block, user chose `Remove`): show the line
-  "Remove `github-project:` block; replace with skip marker:" and
-  print the planned skip-marker comment.
-- **Skip first time** (no prior block, user chose `Skip`): show the
-  line "Add skip marker:" and print the planned comment.
-
-If nothing changes at all — neither front-matter nor body — say "No
-front-matter changes; no `github-project:` change; nothing to
-write." and skip Steps 5 and 5b.
-
-The rest of the body (the prose after the optional `github-project:`
-region) is preserved verbatim and is not part of the diff.
+4. The canonical body template (the same `# Repo Config` ... body
+   used in Step 5).
 
 Then ask explicitly for approval, e.g.:
 
-> Write `.claude/rules/repo-config.md` with the values above? (y to
-> proceed, or tell me what to change)
+> Write `.claude/rules/repo-config.md` with the content above? (y
+> to proceed, or tell me what to change)
 
 Wait for explicit approval (`y`, `yes`, `go`, `do it`, etc.) before
-moving to Steps 5 and 5b. If the user asks for changes, loop back to
-Step 3, Step 3b, or Step 4 as appropriate.
+moving to Step 5. If the user asks for changes, loop back to Step
+3 or Step 3b as appropriate, then re-render the full file in this
+step.
 
 ## Step 5: Write the file
 
-Use the standard `Write` or `Edit` tool so the diff is visible to
-the user.
+Use the `Write` tool to replace the entire file in a single call.
+This applies whether the file existed before or not — `/repo-config`
+is a full-rewrite tool, and the user already saw the full proposed
+contents in Step 4 before approving.
 
-### New file (file did not exist before)
+Do not use `Edit` for in-place region rewrites. Do not preserve any
+bytes from the previous file. The previous contents were discarded
+in Step 2.5; the new file's content is determined entirely by the
+user's answers in this run plus the canonical body template below.
 
 In a brand-new repo `.claude/` and `.claude/rules/` may not exist
 yet. The Claude Code `Write` tool creates missing parent directories
@@ -767,10 +689,9 @@ Compose the file in this order:
 2. A blank line.
 3. **If Step 3b produced a resolved `github-project:` block**: that
    block exactly as rendered in 3b.5, followed by a blank line. **If
-   Step 3b produced a skip marker**: the single-line HTML comment from
-   3b.6, followed by a blank line. **If Step 3b ran but the user chose
-   to do nothing** or **Step 3b did not run** (Jira): no extra content
-   here.
+   Step 3b produced a skip marker**: the single-line HTML comment
+   from 3b.6, followed by a blank line. **If Step 3b did not run**
+   (Jira): no extra content here.
 4. The canonical body template (below), starting with `# Repo Config`.
 
 The canonical body template (body only — front-matter and any
@@ -909,11 +830,12 @@ interactively: pick the project from `gh project list`, then for each
 conceptually-standard slot (`status`, `importance`, `size`) the wizard
 offers every enumerated project field plus a label-namespace option
 and a skip option, and writes `kind:` on every populated slot.
-Issue-types are pulled separately via GraphQL. Hand-editing is still
-supported — the wizard preserves existing values as recommended
-defaults and rewrites the block byte-faithfully against the prior
-literal bytes. See `skills/lib/issue.md` for full details on how the
-block is consumed.
+Issue-types are pulled separately via GraphQL. Hand-editing is
+supported, but `/repo-config` is a full-rewrite tool: re-running it
+will replace this entire file with content built from your answers
+in that run, discarding any hand edits. To keep hand edits, decline
+the overwrite prompt at the start of the next run. See
+`skills/lib/issue.md` for full details on how the block is consumed.
 
 The Jira branch (`issues: Jira`) gets a parallel `jira:` block when
 Jira support is implemented; today, `/issue-*` commands abort under
@@ -938,141 +860,21 @@ The body is genericized: it does not reference any specific repo
 (such as `macos-setup`) by name, and it points at `/repo-config`
 as the way to create the file when it's missing.
 
-### Updating an existing file
-
-When the file already exists there are up to two independent regions
-that can change:
-
-1. The **YAML front-matter** (the six keys) — handled in this
-   sub-step.
-2. The **`github-project:` body region** (the block and/or a skip
-   marker) — handled in Step 5b below.
-
-The prose body outside the `github-project:` region is always
-preserved byte-for-byte. Do not edit it.
-
-#### 5.a Front-matter
-
-Use the `Edit` tool to replace the front-matter block.
-
-**Build `old_string` from the literal front-matter bytes you read in
-Step 2** (opening `---` line through the closing `---` line,
-inclusive, with their original line endings and surrounding
-whitespace). Do **not** reconstruct `old_string` from the parsed
-key/value pairs or from the canonical six-key template shown in
-Step 4. Hand-edited files commonly differ from the canonical form
-in ways that don't change semantics but break exact-string
-matching: keys reordered, extra blank lines between keys, trailing
-spaces, comments inserted between keys, single vs. double quoting.
-A reconstructed `old_string` will fail to match any of these,
-causing `Edit` to error after the user has already completed the
-full interview. Reading the existing bytes verbatim and using them
-as `old_string` is the only reliable way.
-
-This dovetails with Step 2's "Preserve the body of the file
-verbatim" guarantee: the same byte-faithful reading discipline
-applies on both sides of the closing `---`.
-
-`new_string` is the freshly rendered six-key block from Step 4
-(canonical key order, canonical quoting, no comments, no extra blank
-lines). Do not touch the body.
-
-If no front-matter field actually changed, skip this sub-step (no
-`Edit` call); the github-project region may still need updating.
-
-## Step 5b: Update the `github-project:` body region (existing file)
-
-This step runs only when the file already existed **and** Step 3b
-produced a non-"no change" outcome. New-file writes do not use this
-step (Step 5's compose order handles the block inline).
-
-Use the `Edit` tool exactly once per body change, following the same
-byte-faithful discipline as Step 5.a's front-matter update.
-
-### Case A: prior block existed; user chose `Update`
-
-- `old_string`: the **literal bytes of the prior block** captured in
-  Step 2, including any preceding skip-marker-style comments you
-  bundled with the block in Step 2's detect rule. Do not reconstruct
-  from parsed values.
-- `new_string`: the rendered block from Step 3b.5, with no extra
-  surrounding blank lines beyond what the prior bytes had (so the
-  surrounding body keeps its original spacing).
-
-### Case B: prior block existed; user chose `Remove`
-
-- `old_string`: the **literal bytes of the prior block** (same as
-  Case A).
-- `new_string`: the single-line skip-marker comment from Step 3b.6.
-
-### Case C: prior block existed; user chose `Keep`
-
-No `Edit` call. The block stays exactly as it was. (This case is
-filtered out by Step 4's "no change" branch and shouldn't reach
-Step 5b at all; documented here for completeness.)
-
-### Case D: prior skip marker existed; user chose `Populate`
-
-- `old_string`: the **literal bytes of the prior skip marker**
-  captured in Step 2.
-- `new_string`: the rendered block from Step 3b.5.
-
-### Case E: prior skip marker existed; user chose `Skip again` with a new reason
-
-- `old_string`: prior skip marker bytes.
-- `new_string`: the updated skip marker line.
-
-### Case F: no prior block and no prior skip marker; user chose `Populate` or `Skip`
-
-There is no anchor to use as `old_string` because nothing about the
-block currently exists in the file. Pick an insertion anchor and
-prepend the new region to it. The anchor is the first non-blank
-line in the body — for the canonical body template this is the
-`# Repo Config` heading.
-
-To make the anchor unique by construction, always expand it to the
-**canonical first two lines** of the body template:
-
-```text
-# Repo Config
-
-Read by `/issue-address` and by the `issue-developer`, `issue-fixer`,
-```
-
-The phrase "Read by `/issue-address`" is part of the canonical body
-template (see Step 5's "canonical body template") and is extremely
-unlikely to appear elsewhere in the file. This builds disambiguation
-in rather than hinting at it.
-
-- `old_string`: the canonical first two lines of the body, captured
-  **verbatim from the file** (so line endings and any trailing
-  whitespace match exactly). Concretely, that is the `# Repo Config`
-  heading line, the following blank line, and the `Read by ...` line
-  that begins the prose body.
-- `new_string`: the new block (or skip marker), followed by a single
-  blank line, followed by the same captured anchor bytes.
-
-If the file's body deviates from the canonical template — for example,
-a hand-edited repo-config whose body starts with something other than
-`# Repo Config` followed by the "Read by `/issue-address`" line, or
-which has been reordered such that those two lines are not adjacent —
-fall back to the general `Edit` disambiguation discipline: extend
-`old_string` further with whatever surrounding lines are needed to
-make the match unique. Do not write blindly when the anchor cannot
-be located unambiguously; surface the situation to the user and stop.
-
 ### Verification
 
-After each `Edit` call, re-read the file with `Read` and confirm:
+After the `Write` call, re-read the file with `Read` and confirm:
 
-- The block appears at column 0 and parses as YAML.
-- The block terminates at a column-0 non-blank line (heading or
-  next top-level key) as `skills/lib/issue.md` expects.
-- The surrounding body bytes are unchanged outside the edited
-  region. (Compare against the bytes you captured in Step 2.)
+- The front-matter parses as YAML and contains exactly the six
+  canonical keys with the values the user approved in Step 4.
+- If Step 3b produced a `github-project:` block, the block appears
+  at column 0 and parses as YAML; it terminates at a column-0
+  non-blank line (heading or next top-level key) as
+  `skills/lib/issue.md` expects.
+- The canonical body template is present below the front-matter
+  (and below the `github-project:` block, if any).
 
-If verification fails, surface the diff to the user and stop — do
-not attempt a corrective second edit. The user should re-run
+If verification fails, surface the discrepancy to the user and stop
+— do not attempt a corrective second write. The user should re-run
 `/repo-config` after manually resolving the inconsistency.
 
 ## Step 6: Summarize
@@ -1084,14 +886,11 @@ After the file is written, report back:
 - The `github-project:` outcome — one of:
   - `populated` (project title and number, count of status options,
     count of issue types).
-  - `updated` (same details as `populated`, plus a one-line summary
-    of what changed: e.g. "default status Todo -> In Progress; added
-    issue type Goal").
-  - `kept unchanged` (existing block left as-is).
-  - `removed` (block deleted; skip marker written with reason).
   - `skipped` (no block present; skip marker written with reason).
   - `not applicable` (`issues: Jira`, so the block doesn't apply).
-- Whether this was a new file or an update.
+- Whether the prior file (if any) was replaced. If the user
+  declined the Step 2.5 overwrite prompt, this step is not reached
+  — the skill exits in Step 2.5 with a "left unchanged" message.
 - Next step: the user can now run `/issue-address` and the
   associated subagents in this repo.
 
@@ -1100,21 +899,28 @@ After the file is written, report back:
 ## Hard constraints
 
 - **Never write the file without explicit approval** in Step 4.
+- **Never overwrite an existing file without the Step 2.5
+  confirmation.** If the user declines, exit cleanly and leave the
+  file untouched.
+- **Never carry values forward from the existing file.** Recommended
+  defaults always come from this skill's built-in defaults or from
+  values the user enters in the current run, never from the
+  previous file's contents. Reading the prior file is for display
+  only (Step 2.5).
 - **Never edit anything outside the target repo.** The skill writes
   exactly one file: `<repo-root>/.claude/rules/repo-config.md`.
 - **Never run destructive git commands.** This skill does not
   commit, push, branch, reset, or otherwise change git state. The
   user commits the new file themselves.
-- **Always go through `Edit` or `Write`** so the diff is visible.
+- **Always go through `Write`** so the user sees the new contents
+  applied as a single diff. Do not use `Edit` to rewrite regions
+  of the prior file — the file is always replaced in full.
 - **Do not validate remote branch existence** — out of scope.
-- **Do not migrate other config schemas.** If the existing file
-  uses unknown keys, surface the problem and stop; do not silently
-  drop or rename keys.
 - **Do not prompt for `github-project:` under Jira.** Step 3b runs
   only when the just-chosen `issues` value is `GitHub`. Under
-  `issues: Jira`, no project block is added, removed, or asked
-  about; that branch will eventually get a parallel `jira:` block
-  when Jira support lands.
+  `issues: Jira`, no project block is added or asked about; that
+  branch will eventually get a parallel `jira:` block when Jira
+  support lands.
 - **Never invent project IDs, field IDs, option IDs, or issue type
   IDs.** All IDs written to the `github-project:` block must come
   from a live `gh` query in Step 3b (or, with explicit user override
