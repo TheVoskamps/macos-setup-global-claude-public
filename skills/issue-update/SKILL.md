@@ -160,6 +160,13 @@ aborts with the shared message.
      names are case-insensitive) and exact for assignee logins
      (GitHub logins are case-insensitive on input but echoed back in
      their canonical casing — match against the canonical login).
+
+     When comparing requested assignee logins against the
+     actual-added/actual-removed sets, lowercase both sides before
+     comparison (GitHub logins are case-insensitive on input, so
+     e.g. `Evoskamp` and `evoskamp` are the same user). The mismatch
+     report line (see "Output" below) should echo the user's input
+     string verbatim so they recognize what they typed.
    - **Compare against the requested deltas** (the comma-separated
      values the user passed on each flag):
      - For `--add-assignees`: any requested login NOT in
@@ -216,20 +223,23 @@ Updated issue #<N>:
   assignees requested but not added: edwinvoskamp (not a valid
     assignee on this repo, or permission denied)
   labels requested but not added: bugg (not a valid label on this repo)
-  labels requested but not removed: feaure (was not on the issue,
-    or label does not exist)
+  labels requested but not removed: needs-triage (label is on the
+    issue but could not be removed — permission denied, or
+    label-management is restricted)
 ```
 
 The parenthetical hint differs by direction:
 
 - **assignees requested but not added** — `(not a valid assignee on
   this repo, or permission denied)`
-- **assignees requested but not removed** — `(login is not currently
-  an assignee, or does not exist)`
+- **assignees requested but not removed** — `(assignee is on the
+  issue but could not be removed — permission denied, or some other
+  gh-side filter)`
 - **labels requested but not added** — `(not a valid label on this
   repo)`
-- **labels requested but not removed** — `(was not on the issue, or
-  label does not exist)`
+- **labels requested but not removed** — `(label is on the issue but
+  could not be removed — permission denied, or label-management is
+  restricted)`
 
 List multiple failed names comma-separated on a single mismatch line
 (e.g. `assignees requested but not added: alice, bob (not a valid
