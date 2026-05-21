@@ -18,20 +18,30 @@ SCHEMA_VERSION = 6
 ```
 
 `6` is the version readers should require as of this writing. A
-reader pins the version it knows how to consume in its own code
-(see "Reader-side version pin" below) and aborts cleanly when the
-target file is older. The writer (`/repo-config`) stamps `6` into
-every file it produces; see `skills/repo-config/SKILL.md`.
+reader pins the **minimum** version it knows how to consume in its
+own code (see "Reader-side version pin" below) and aborts cleanly
+when the target file is older. The writer (`/repo-config`) stamps
+`6` into every file it produces; see `skills/repo-config/SKILL.md`.
 
-Why a constant rather than a range:
+Why a minimum rather than an exact match:
 
-- The schema-version is a single integer, not a `[min, max]`
-  interval. Readers don't accept "anything ≥ N" — they accept
-  exactly the version they were written against, and a re-run of
-  `/repo-config` migrates older files to the current shape.
+- Schema bumps are **additive by construction** — a bump adds new
+  fields or new option values without changing the meaning of the
+  existing seven canonical front-matter keys. A reader written
+  against version `N` can therefore safely read a version `N+1`
+  file: the keys it knows about still mean what they did, and the
+  keys it doesn't know about are simply ignored.
+- Readers accordingly accept **anything ≥ their pinned version**.
+  Equal versions are read as-is; newer versions are read as if
+  they were the pinned version, with unknown fields skipped. A
+  reader still declares which version it was written against, so
+  older files trigger a clean "Schema-version stale" abort with a
+  re-run-`/repo-config` fix hint.
 - Every bump to the schema is paired with a writer update and a
-  bump to this constant. Readers that need an older shape should
-  pin their own required version and refuse to upgrade silently.
+  bump to this constant. A future breaking-change bump (one that
+  would invalidate the "additive by construction" guarantee) may
+  revisit this policy and require readers to pin an exact value;
+  until then, newer-is-fine.
 
 ## What the file looks like
 
@@ -91,10 +101,15 @@ namespace presents consistent errors.
      abort on a higher-than-required version.
 
 5. **Read front-matter fields.** Pull the six canonical fields
-   (see "Front-matter fields" below). Missing fields are a
-   schema-version mismatch by construction (a `schema-version: 6`
-   file is required to populate all six); treat any missing field
-   as a stale-schema abort.
+   (see "Front-matter fields" below). A `schema-version: 6` file
+   is required to populate all six; if any canonical field is
+   missing on an otherwise-current file (schema-version present
+   and ≥ the reader's required version), abort with the
+   "Front-matter incomplete" message, naming the missing field.
+   This is distinct from the "Schema-version stale" abort, which
+   covers files at an older version: a current-version file with
+   a missing field is not stale, it is incomplete, and the user
+   needs to be told *which* field is absent.
 
 6. **(Optional) Read the `github-project:` block.** Scan the body
    for a line that starts with `github-project:` at column 0. If
@@ -111,21 +126,31 @@ namespace presents consistent errors.
 
 ### Reader-side version pin
 
-A reader pins the schema-version it requires as a constant in its
-own code. For prose-defined readers (subagent definitions, skill
-SKILL.md files), the constant is a literal in the reader's text;
-for any future executable reader, it would be a code constant.
+A reader pins the **minimum** schema-version it requires as a
+constant in its own code. For prose-defined readers (subagent
+definitions, skill SKILL.md files), the constant is a literal in
+the reader's text; for any future executable reader, it would be a
+code constant.
 
 The pinned value should equal the version this library documents
-at the time the reader was written. When the schema bumps:
+at the time the reader was written. Readers accept files at the
+pinned version **or newer** (per the "Why a minimum rather than an
+exact match" rationale in "Current schema version" above); they
+abort cleanly with the "Schema-version stale" message only when
+the file is at an *older* version. When the schema bumps:
 
 1. The writer (`/repo-config`) bumps its emitted value.
 2. This library bumps `SCHEMA_VERSION` to match.
-3. Each reader bumps its own pin in lockstep, in the same PR or a
-   tightly-scoped follow-up.
+3. Existing readers continue to work against the newer files
+   without modification, because bumps are additive by
+   construction (they read only the fields they know about). A
+   reader's pin is bumped only when the reader needs to consume a
+   newly-added field — there is no lockstep requirement.
 
-Readers that lag the bump abort cleanly per the "Schema-version
-stale" message; they do not silently read a newer file.
+A future breaking-change bump that invalidates the additive
+guarantee would change this — at that point readers would need to
+abort on newer files too, and the policy in "Current schema
+version" above would be revised accordingly.
 
 ## Abort messages
 
@@ -164,6 +189,23 @@ Variable parts are wrapped in backticks.
   the reader's required version. `<N>` is the file's current
   version, `<M>` is the reader's required version. The fix is the
   same — re-run `/repo-config` to overwrite the file.
+
+- **Front-matter incomplete**
+
+  > This repo's `.claude/rules/repo-config.md` is at
+  > schema-version `<N>` but is missing the canonical field
+  > `<field-name>`. Run `/repo-config` to regenerate it.
+
+  Triggered when the file's `schema-version` is present and ≥ the
+  reader's required version, but one of the six canonical
+  front-matter fields (see "Front-matter fields" below) is absent
+  from the parsed front-matter. `<N>` is the file's
+  schema-version; `<field-name>` is the missing field's key.
+  Distinct from "Schema-version stale" because the file is not at
+  an older version — it is at a current version but malformed
+  (likely hand-edited). The fix is to re-run `/repo-config`, which
+  rewrites the file from scratch with all canonical fields
+  present.
 
 Readers should not invent additional abort messages for the same
 failure shapes. If a new failure shape arises, document it in this
