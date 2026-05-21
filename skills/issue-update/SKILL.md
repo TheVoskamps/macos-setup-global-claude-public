@@ -61,10 +61,31 @@ aborts with the shared message.
 
 ## Execution (GitHub backend)
 
-1. **Fetch current body** if `--append` or `--prepend` was passed.
-   Use `gh issue view <N> --json body --jq .body`. Do not fetch when
-   only `--body-file` is in play — the new body is the file contents
-   verbatim and the current body is irrelevant.
+1. **Pre-edit fetch.** Decide which fields need to be read from the
+   issue before the edit, based on the flags in play:
+
+   - `--append` or `--prepend` → fetch `body`.
+   - `--add-assignees` or `--remove-assignees` → fetch `assignees`.
+   - `--add-labels` or `--remove-labels` → fetch `labels`.
+
+   Fold all needed fields into a **single** `gh issue view` call to
+   keep the round-trip count low. For example, when both
+   `--prepend` and `--add-assignees` are in play, run
+
+   ```bash
+   gh issue view <N> --json body,assignees
+   ```
+
+   and parse out each field as needed (e.g.
+   `--jq '{body: .body, assignees: [.assignees[].login]}'`).
+
+   When only `--body-file`, `--title`, or no body/list flags are in
+   play, skip the pre-edit fetch entirely — there is nothing to
+   compute against.
+
+   Capture the pre-edit assignee logins (as a set of strings) and
+   label names (as a set of strings) for later use in the post-edit
+   delta check. The pre-edit body, if fetched, feeds step 2.
 
 2. **Compute the new body**:
    - If `--body-file`: read the file. That's the new body.
@@ -113,6 +134,48 @@ aborts with the shared message.
    `could not resolve to an Issue`, emit the "Issue not found"
    error from the catalogue in `skills/lib/issue.md` and abort.
 
+5. **Post-edit delta check** (only when one or more of
+   `--add-assignees`, `--remove-assignees`, `--add-labels`, or
+   `--remove-labels` was passed).
+
+   `gh issue edit` silently accepts unknown assignee logins and
+   unknown labels: it exits zero and prints the issue URL even when
+   the assignee/label is not valid on the repo (typo, wrong username,
+   user lacks assignee permission, label does not exist). Without a
+   post-check, the skill would report "assignees added: `<login>`"
+   purely based on the CLI input, not on what actually landed.
+
+   - **Re-fetch the affected fields** in a single `gh issue view`
+     call. Pick only the fields whose flags were in play, e.g.
+     `gh issue view <N> --json assignees,labels` when both kinds were
+     touched, or `--json assignees` when only assignee flags ran.
+   - **Compute the actual deltas** against the pre-edit sets captured
+     in step 1:
+     - actual-added-assignees = post − pre
+     - actual-removed-assignees = pre − post
+     - actual-added-labels = post − pre
+     - actual-removed-labels = pre − post
+
+     Set membership is case-insensitive for label names (GitHub label
+     names are case-insensitive) and exact for assignee logins
+     (GitHub logins are case-insensitive on input but echoed back in
+     their canonical casing — match against the canonical login).
+   - **Compare against the requested deltas** (the comma-separated
+     values the user passed on each flag):
+     - For `--add-assignees`: any requested login NOT in
+       actual-added-assignees AND NOT already in the pre-edit
+       assignee set is a **failed-add**.
+     - For `--remove-assignees`: any requested login NOT in
+       actual-removed-assignees AND still present in the post-edit
+       assignee set (i.e. it was supposed to leave but didn't) is a
+       **failed-remove**. A requested login that was not on the
+       issue to begin with is a no-op, not a failure.
+     - Same shape for `--add-labels` and `--remove-labels`.
+   - **Surface mismatches in the output.** See the "Output" section
+     below for the exact line format. Do **not** abort — the skill
+     still exits zero. The mismatch is information; the edit
+     succeeded for what GitHub accepted.
+
 ## Output
 
 Print a single line per field that changed:
@@ -132,3 +195,46 @@ Then a blank line and the issue URL.
 
 Skip fields that didn't change. When only one flag was passed, only
 one summary line shows.
+
+The "labels added", "labels removed", "assignees added", and
+"assignees removed" lines reflect what **actually landed** on the
+issue per the post-edit delta check (step 5 of Execution), not the
+raw CLI input. A requested login or label that didn't land does
+**not** appear on the corresponding "added"/"removed" line; it is
+surfaced on its own mismatch line instead. If every requested
+login/label in a given add/remove direction failed to land, the
+corresponding line is omitted entirely (since nothing actually
+changed in that direction).
+
+When the post-edit delta check finds mismatches, append one
+mismatch line per direction immediately under the relevant
+"added"/"removed" line. Format:
+
+```text
+Updated issue #<N>:
+  assignees added: evoskamp
+  assignees requested but not added: edwinvoskamp (not a valid
+    assignee on this repo, or permission denied)
+  labels requested but not added: bugg (not a valid label on this repo)
+  labels requested but not removed: feaure (was not on the issue,
+    or label does not exist)
+```
+
+The parenthetical hint differs by direction:
+
+- **assignees requested but not added** — `(not a valid assignee on
+  this repo, or permission denied)`
+- **assignees requested but not removed** — `(login is not currently
+  an assignee, or does not exist)`
+- **labels requested but not added** — `(not a valid label on this
+  repo)`
+- **labels requested but not removed** — `(was not on the issue, or
+  label does not exist)`
+
+List multiple failed names comma-separated on a single mismatch line
+(e.g. `assignees requested but not added: alice, bob (not a valid
+assignee on this repo, or permission denied)`).
+
+The skill still exits **zero** when mismatches are present — the
+`gh issue edit` call succeeded for whatever GitHub accepted; the
+mismatch is information for the user, not an error.
