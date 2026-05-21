@@ -110,16 +110,6 @@ spawn prompt does not give them, ask before proceeding.
    is fine. See `git-workflow.md` → "Issue References" for the full
    rule.
 
-   `References:` lines on the PR/commit must list only *other* related
-   issues — typically the ones the parent issue itself references. Do
-   NOT include the parent issue (the one being fixed) in `References:`.
-   The PR is the work for that issue; the linkage is already
-   established by branch name and PR title/description. If the parent
-   issue's body references other issues (predecessors, follow-ups,
-   umbrella issues, etc.), add one `References: <link-prefix><M>` line
-   per such issue. If there are no other related issues, omit
-   `References:` entirely.
-
 9. Push the branch.
 
 10. Create a PR (or equivalent) targeting `<target-branch>`. If
@@ -131,11 +121,6 @@ spawn prompt does not give them, ask before proceeding.
       --body "## Summary
     <what changed and why>"
     ```
-
-    Append a `References: <link-prefix><M>` line per *other* related
-    issue (one per line) if the parent issue body references them. Do
-    NOT add `References: <link-prefix><N>` for the parent issue N — see
-    step 8.
 
     If `source-control == CodeCommit`: TODO — CodeCommit PR-create
     path not yet implemented. Abort with: "CodeCommit source-control

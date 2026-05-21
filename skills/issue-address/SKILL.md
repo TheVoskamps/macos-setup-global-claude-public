@@ -185,8 +185,6 @@ Do NOT pass:
 - generic git workflow instructions
 - end-of-run cleanup steps
 - "use this gh command" templates
-- instructions to write `References: <link-prefix><N>` for the parent
-  issue N — that is forbidden (see Hard Constraints below)
 - anything else that belongs in the agent definition
 
 The agents read the config and know their own workflow. Trust them.
@@ -434,18 +432,12 @@ To start the sequential queue, reply: "continue with <link-prefix>103"
   number instead.
 - **Never duplicate agent runbooks in spawn prompts.** Trust the agent
   to read its own definition and the per-repo config.
-- **Never instruct a teammate to write `References: <link-prefix><N>`
-  for the parent issue N.** `References:` lines on the PR/commit must
-  list only *other* related issues — typically the ones the parent
-  issue itself references (predecessors, follow-ups, umbrella issues,
-  etc.). Do NOT include the parent issue (the one being fixed) in
-  `References:`. The PR is the work for that issue; the linkage is
-  already established by branch name and PR title/description.
-  Closing-keyword prohibition stays as-is — a closing keyword
-  (`close`/`closes`/`closed`/`fix`/`fixes`/`fixed`/`resolve`/
-  `resolves`/`resolved`, case-insensitive) **immediately followed by**
-  an issue reference (`#N`, `owner/repo#N`, `GH-N`, or issue URL)
-  auto-closes the referenced issue and must never appear. See
+- **Never instruct a teammate to use a closing keyword adjacent to an
+  issue reference.** A closing keyword (`close`/`closes`/`closed`/
+  `fix`/`fixes`/`fixed`/`resolve`/`resolves`/`resolved`,
+  case-insensitive) **immediately followed by** an issue reference
+  (`#N`, `owner/repo#N`, `GH-N`, or issue URL) auto-closes the
+  referenced issue and must never appear. See
   `rules/git-workflow.md` → "Issue References" for the full rule.
 - **Never run subagent worktree cleanup in parallel.** Cleanup is
   serial within a wave, per Anthropic issue #48927.
