@@ -651,9 +651,12 @@ Compose the preview in the same order Step 5 will write it:
      `6`** in files this skill writes. It is a constant baked
      into the writer, not an interview question — see
      `skills/lib/repo-config.md` for how readers consume it.
-     When the schema bumps, update this skill's constant, the
-     library's `SCHEMA_VERSION`, and each reader's pinned
-     version in lockstep.
+     When the schema bumps, update this skill's constant and the
+     library's `SCHEMA_VERSION`. Readers pin a **minimum**
+     required version and accept any file at that version or
+     newer (bumps are additive by construction), so a reader's
+     pin is bumped only when that reader needs to consume a
+     newly-added field — there is no lockstep requirement.
    - `issue-link-prefix` is always quoted because values like
      `#` are otherwise interpreted as a YAML comment.
 
