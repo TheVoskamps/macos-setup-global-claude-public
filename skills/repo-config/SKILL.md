@@ -87,6 +87,11 @@ defaults are:
 - `default-pr-target-branch`: `main`
 - `issue-branch-naming-prefix`: `none`
 
+`schema-version` is **not** in this list — it is a write-time
+constant (currently `6`) baked into this skill, not an interview
+question. See `skills/lib/repo-config.md` for the reader contract
+that consumes it.
+
 Also, before Step 3, gather the local branch list with
 `git branch --format='%(refname:short)'` so you can offer real
 branches as options for the two branch fields.
@@ -626,10 +631,11 @@ performs a full-file write and discards the previous contents.
 
 Compose the preview in the same order Step 5 will write it:
 
-1. The resolved YAML front-matter (the canonical six-key block):
+1. The resolved YAML front-matter (the canonical seven-key block):
 
    ```yaml
    ---
+   schema-version: 6
    source-control: <value>
    issues: <value>
    issue-link-prefix: "<value>"
@@ -639,8 +645,17 @@ Compose the preview in the same order Step 5 will write it:
    ---
    ```
 
-   Note: `issue-link-prefix` is always quoted because values like
-   `#` are otherwise interpreted as a YAML comment.
+   Notes:
+
+   - `schema-version` is **always the first key** and **always
+     `6`** in files this skill writes. It is a constant baked
+     into the writer, not an interview question — see
+     `skills/lib/repo-config.md` for how readers consume it.
+     When the schema bumps, update this skill's constant, the
+     library's `SCHEMA_VERSION`, and each reader's pinned
+     version in lockstep.
+   - `issue-link-prefix` is always quoted because values like
+     `#` are otherwise interpreted as a YAML comment.
 
 2. A blank line.
 
@@ -684,8 +699,9 @@ tool path that does not auto-create parents, run
 
 Compose the file in this order:
 
-1. The resolved YAML front-matter (the canonical six-key block from
-   Step 4).
+1. The resolved YAML front-matter (the canonical seven-key block
+   from Step 4 — `schema-version: 6` followed by the six
+   user-resolved fields, in that exact order).
 2. A blank line.
 3. **If Step 3b produced a resolved `github-project:` block**: that
    block exactly as rendered in 3b.5, followed by a blank line. **If
@@ -707,6 +723,13 @@ time.
 
 ## Fields
 
+- **schema-version**: integer naming the file's schema version.
+  The current version is `6`. The writer (`/repo-config`) stamps
+  it into every file it produces; readers (see
+  `skills/lib/repo-config.md`) consult it and abort cleanly when
+  the value is missing or older than they require. Do not edit
+  this by hand — re-run `/repo-config` to migrate to a newer
+  version.
 - **source-control**: `GitHub` or `CodeCommit`. Selects between `gh`
   and `aws codecommit` for VCS operations.
 - **issues**: `GitHub` or `Jira`. Selects between `gh issue` and the
@@ -732,7 +755,7 @@ time.
 
 ## Optional: `github-project:` block
 
-This section is **body-only**; it is not part of the six-key
+This section is **body-only**; it is not part of the seven-key
 front-matter. Add it below the front-matter when the repo has an
 associated GitHub Project V2 board and you want the `/issue-*`
 commands (and `/issue-create`'s `--type` / `--importance` / `--size`
@@ -873,8 +896,9 @@ as the way to create the file when it's missing.
 
 After the `Write` call, re-read the file with `Read` and confirm:
 
-- The front-matter parses as YAML and contains exactly the six
-  canonical keys with the values the user approved in Step 4.
+- The front-matter parses as YAML and contains exactly the seven
+  canonical keys: `schema-version: 6` (first) followed by the six
+  fields with the values the user approved in Step 4.
 - If Step 3b produced a `github-project:` block, the block appears
   at column 0 and parses as YAML; it terminates at a column-0
   non-blank line (heading or next top-level key) as
