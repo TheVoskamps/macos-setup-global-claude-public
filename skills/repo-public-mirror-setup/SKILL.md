@@ -402,6 +402,12 @@ jobs:
           # filter output is identical for some other reason).
           LOCAL_TIP=$(git rev-parse refs/heads/main)
           REMOTE_TIP=$(git ls-remote mirror refs/heads/main | awk '{print $1}')
+          # Asymmetric -n guard is deliberate: LOCAL_TIP is guaranteed
+          # non-empty (git rev-parse without --verify hard-fails under
+          # set -e if refs/heads/main is missing locally), while
+          # REMOTE_TIP is legitimately empty on a fresh mirror that has
+          # no refs/heads/main yet (bootstrap case — fall through to
+          # the push so the mirror gets its first commit).
           if [ -n "$REMOTE_TIP" ] && [ "$LOCAL_TIP" = "$REMOTE_TIP" ]; then
             echo "Mirror refs/heads/main already at $LOCAL_TIP; nothing to push."
             exit 0
