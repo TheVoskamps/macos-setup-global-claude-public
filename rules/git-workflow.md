@@ -256,58 +256,6 @@ and changes the meaning unnecessarily.
 issues, etc.) use a `References: #N` trailer. For multiple, repeat the
 line. `References:` is not a closing keyword.
 
-#### CRITICAL — never self-reference the parent issue
-
-A PR/commit for issue N must **not** include `References: #N` for that
-same issue N:
-
-- ❌ Never put the parent issue (the one being fixed) in
-  `References:`. The PR is the work for that issue; its linkage is
-  already established by branch name and PR title/description.
-- ✅ `References:` lines list only *other* related issues — typically
-  the ones the parent issue itself references in its body. If there
-  are no other related issues, omit `References:` entirely.
-
-**Applies to:**
-
-- Commit messages
-- Pull request descriptions
-- Pull request commit squash messages
-
-**Examples:**
-
-No related issues — omit the trailer entirely:
-
-```text
-Add ARM64 support to CI/CD pipelines
-
-Implements CodeBuild environment overrides for ARM64 Docker builds.
-```
-
-One other related issue (e.g. parent issue body says "blocked by
-issue 42"):
-
-```text
-Add ARM64 support to CI/CD pipelines
-
-Implements CodeBuild environment overrides for ARM64 Docker builds.
-
-References: #42
-```
-
-Multiple other related issues (predecessors, follow-ups, umbrella
-issues — but **not** the issue being fixed):
-
-```text
-Update authentication system
-
-Refactors OAuth flow and adds MFA support.
-
-References: #42
-References: #57
-References: #63
-```
-
 ## Commit Signing
 
 ### IMPORTANT

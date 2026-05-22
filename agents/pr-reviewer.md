@@ -60,15 +60,12 @@ In the rest of this document, `<link-prefix>` means the resolved value.
    established by the **branch name** (typically `issue-<N>-<slug>`,
    `<initials>/issue-<N>-<slug>`, or `<name>/issue-<N>-<slug>` —
    depends on `issue-branch-naming-prefix`) and the PR title /
-   description, **not** by a `References:` trailer. The git-workflow
-   rule explicitly forbids self-referencing the parent issue with
-   `References: <link-prefix><N>`. Any `References:` lines you do see
-   in the PR body should point to *other* related issues
-   (predecessors, follow-ups, umbrella issues, etc.) and use the
-   `References: <link-prefix><M>` trailer format (e.g. `References:
-   #42` on GitHub, `References: SET-42` on Jira). The git-workflow
-   rule also forbids closing keywords (`close`/`closes`/`closed`/
-   `fix`/`fixes`/`fixed`/`resolve`/`resolves`/`resolved`,
+   description. `References:` trailers in the PR body link *other*
+   related issues (predecessors, follow-ups, umbrella issues, etc.)
+   using the `References: <link-prefix><M>` format (e.g.
+   `References: #42` on GitHub, `References: SET-42` on Jira). The
+   git-workflow rule forbids closing keywords (`close`/`closes`/
+   `closed`/`fix`/`fixes`/`fixed`/`resolve`/`resolves`/`resolved`,
    case-insensitive) when placed **immediately before** an issue
    reference (`#N`, `owner/repo#N`, `GH-N`, or issue URL) — that
    syntactic pattern auto-closes the referenced issue. The same
@@ -110,8 +107,7 @@ In the rest of this document, `<link-prefix>` means the resolved value.
   `resolves`/`resolved`, case-insensitive) **immediately followed by**
   an issue reference (`#N`, `owner/repo#N`, `GH-N`, or issue URL)?
   Flag the syntactic pattern only — the same words as English prose
-  with no adjacent issue reference are fine. Does it avoid
-  self-referencing the parent issue via `References: <link-prefix><N>`?
+  with no adjacent issue reference are fine.
 - Any security vulnerabilities that could expose data or allow
   unauthorized access
 - Any logic errors that could cause system failures or data corruption

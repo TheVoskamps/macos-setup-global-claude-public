@@ -49,8 +49,7 @@ In the rest of this document, `<source-branch>`, `<link-prefix>`, and
 You must be given:
 
 - PR number (for diff/view of the PR; CLI selected by `source-control`)
-- Issue number (for context — the parent issue this PR is for; do NOT
-  put it in a `References:` trailer, see Output step 3)
+- Issue number (for context — the parent issue this PR is for)
 - Branch name (`<branch-name>`) — you check this out before making changes
 
 Do not assume you inherit cwd, branch, or any other context from a
@@ -171,16 +170,6 @@ After making all edits:
    keyword as plain English prose with no adjacent issue reference is
    fine. See `git-workflow.md` → "Issue References" for the full
    rule.
-
-   `References:` lines on the commit must list only *other* related
-   issues — typically the ones the parent issue itself references. Do
-   NOT include the parent issue (the one this PR is for) in
-   `References:`. The PR is the work for that issue; the linkage is
-   already established by branch name and PR title/description. If the
-   parent issue's body references other issues (predecessors,
-   follow-ups, umbrella issues, etc.), add one
-   `References: <link-prefix><M>` line per such issue. If there are no
-   other related issues, omit `References:` entirely.
 4. Push the doc commit to the same branch so it appears on the same PR.
 5. Report back a summary: which files changed, what sections were updated,
    and anything you flagged as needing human review (e.g., a section you
