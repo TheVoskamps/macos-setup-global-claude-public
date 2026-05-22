@@ -104,10 +104,10 @@ refer back to this callout rather than repeating the names.
       If `git worktree remove` fails with `fatal: cannot remove a
       locked working tree`, inspect the lock reason via
       `git worktree list --porcelain`. If it matches the standard
-      harness shape `claude agent agent-<hash> (pid NNNN)` AND the
+      harness shape `claude agent agent-<hash> (pid NNNN)` AND (the
       PID is no longer alive (`kill -0 <pid>` fails) OR the branch
       passed step 3's "merged + remote gone" gate (which is the case
-      here, since we're inside step 4), this is a stale end-state
+      here, since we're inside step 4)), this is a stale end-state
       lock from a returned or crashed subagent — run
       `git worktree unlock <path>` then re-run
       `git worktree remove <path>` (no `--force`). See

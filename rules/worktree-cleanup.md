@@ -97,9 +97,19 @@ git worktree list --porcelain
 
 # Does the lock reason match the standard harness shape?
 # Matches: "claude agent agent-<hash> (pid NNNN)"
+# Concrete regex:
+git worktree list --porcelain | \
+  grep -E '^locked claude agent agent-[a-f0-9]+ \(pid [0-9]+\)$'
 
 # Is the PID still alive?
 kill -0 <pid> 2>/dev/null && echo "alive" || echo "dead"
+# Edge case: on a multi-user host, `kill -0` can fail with EPERM
+# when the PID exists but is owned by another user. The one-liner
+# above treats EPERM as "dead", which is wrong in that case — the
+# process is still running, just not ours to signal. On a
+# single-user Mac this can't happen; if you ever run this tooling
+# in a shared environment, distinguish EPERM (treat as "alive", do
+# not unlock) from ESRCH (treat as "dead", safe to unlock).
 
 # Does the worktree have uncommitted changes?
 git -C <path> status --porcelain   # empty = clean
@@ -108,6 +118,14 @@ git -C <path> status --porcelain   # empty = clean
 
 # Does the worktree's branch have unpushed commits?
 git -C <path> rev-list @{upstream}..HEAD   # empty = fully pushed
+# Note: `@{upstream}..HEAD` fails loudly with "no upstream
+# configured" on branches that were never pushed — common for the
+# harness's `worktree-agent-*` branches. Treat that failure as
+# "not verifiable as pushed" and skip-and-report, OR fall back to
+# a reachability check against the repo's long-lived set the way
+# `/git-cleanup-branches-and-worktrees` Pass 2 does (see
+# "Branch has no upstream configured, or the upstream is gone" in
+# `skills/git-cleanup-branches-and-worktrees/SKILL.md`).
 ```
 
 If the lock-reason check passes AND one of the three "subagent
