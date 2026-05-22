@@ -265,7 +265,9 @@ Create the workflow file. It triggers on `push` to `main` and on
 `workflow_dispatch` for manual reruns. Steps: checkout full
 history, install `git-filter-repo`, clone a fresh bare copy, run
 the filter with `--paths-from-file` and `--mailmap`, regenerate
-`CONTRIBUTORS`, force-push to the mirror's `main`.
+`CONTRIBUTORS` (skipped when the blob is unchanged), and
+force-push to the mirror's `main` (skipped when the new local
+tip already equals the mirror's current tip).
 
 Use this template, substituting `<owner>/<short>-public` for the
 mirror's full name:
@@ -352,6 +354,18 @@ jobs:
             git shortlog -sne --all
           } > "${RUNNER_TEMP}/CONTRIBUTORS"
           BLOB=$(git hash-object -w "${RUNNER_TEMP}/CONTRIBUTORS")
+          # Short-circuit: if the freshly-generated CONTRIBUTORS blob
+          # is byte-identical to the one already at HEAD:CONTRIBUTORS,
+          # do not synthesize a new commit. Skipping the commit here
+          # keeps refs/heads/main pointing at the filter-repo output,
+          # so a no-source-change run produces a tip SHA identical to
+          # the previous run's tip and the force-push downstream
+          # becomes a no-op.
+          HEAD_BLOB=$(git rev-parse --verify --quiet HEAD:CONTRIBUTORS || true)
+          if [ -n "$HEAD_BLOB" ] && [ "$BLOB" = "$HEAD_BLOB" ]; then
+            echo "CONTRIBUTORS unchanged (blob $BLOB); skipping synthetic commit."
+            exit 0
+          fi
           # Reuse HEAD's tree as the base, then overlay the new blob
           # via a temporary index. read-tree loads HEAD's tree into
           # the index; update-index --add registers the new blob;
@@ -362,7 +376,15 @@ jobs:
           git update-index --add --cacheinfo "100644,$BLOB,CONTRIBUTORS"
           NEW_TREE=$(git write-tree)
           unset GIT_INDEX_FILE
-          NEW_HEAD=$(git -c user.name='public-mirror' \
+          # Pin author/committer dates to HEAD's committer date so the
+          # synthetic commit's SHA is deterministic across runs. Using
+          # wall-clock here would change the tip SHA on every run even
+          # when nothing else changed, which is the root cause of the
+          # spurious force-pushes consumers see.
+          HEAD_DATE=$(git show -s --format=%cI HEAD)
+          NEW_HEAD=$(GIT_AUTHOR_DATE="$HEAD_DATE" \
+                     GIT_COMMITTER_DATE="$HEAD_DATE" \
+                     git -c user.name='public-mirror' \
                          -c user.email="$BOT_EMAIL" \
                        commit-tree "$NEW_TREE" -p HEAD \
                        -m 'Regenerate CONTRIBUTORS')
@@ -373,6 +395,23 @@ jobs:
           set -euo pipefail
           cd "$FILTERED"
           git remote add mirror git@github-mirror:<owner>/<short>-public.git
+          # Defense-in-depth: if the mirror's current refs/heads/main
+          # already matches our new tip, do not push. This catches
+          # any case the CONTRIBUTORS short-circuit above misses (and
+          # keeps no-op runs from moving the remote tip even if the
+          # filter output is identical for some other reason).
+          LOCAL_TIP=$(git rev-parse refs/heads/main)
+          REMOTE_TIP=$(git ls-remote mirror refs/heads/main | awk '{print $1}')
+          # Asymmetric -n guard is deliberate: LOCAL_TIP is guaranteed
+          # non-empty (git rev-parse without --verify hard-fails under
+          # set -e if refs/heads/main is missing locally), while
+          # REMOTE_TIP is legitimately empty on a fresh mirror that has
+          # no refs/heads/main yet (bootstrap case — fall through to
+          # the push so the mirror gets its first commit).
+          if [ -n "$REMOTE_TIP" ] && [ "$LOCAL_TIP" = "$REMOTE_TIP" ]; then
+            echo "Mirror refs/heads/main already at $LOCAL_TIP; nothing to push."
+            exit 0
+          fi
           git push --force mirror refs/heads/main:refs/heads/main
 ```
 
@@ -394,6 +433,23 @@ Notes on the template:
   in the remote URL with real values when writing the file.
 - `concurrency: public-mirror` prevents overlapping force-pushes if
   two pushes land on `main` close together.
+- The `Regenerate CONTRIBUTORS` step pins `GIT_AUTHOR_DATE` and
+  `GIT_COMMITTER_DATE` to HEAD's committer date before
+  `commit-tree`, so the synthetic commit's SHA is derived
+  deterministically from upstream rather than from wall-clock. It
+  also short-circuits when the freshly-generated `CONTRIBUTORS`
+  blob already equals the one at `HEAD:CONTRIBUTORS`, leaving
+  `refs/heads/main` at the filter-repo output unchanged.
+- The `Force-push to mirror` step compares the new local tip to the
+  mirror's current `refs/heads/main` (`git ls-remote`) and exits
+  without pushing when they match. This is defense in depth on top
+  of the CONTRIBUTORS short-circuit — together they ensure a
+  no-source-change workflow run does not move the mirror's tip,
+  which is what lets consumers do a normal `git pull` instead of
+  `git fetch && git reset --hard`. Note this only stabilises SHAs
+  across no-op runs; genuine upstream changes still cause
+  `git filter-repo` to re-derive descendant SHAs and force-push,
+  which is tracked separately (see issue #122).
 
 ## Step 8: Halt #2 — user populates `paths.allowlist`
 
@@ -622,7 +678,16 @@ JSON
 Notes:
 
 - `allow_force_pushes: true` is intentional — the workflow
-  force-pushes filtered history on every run.
+  force-pushes filtered history whenever the new local tip
+  differs from the mirror's current tip. A workflow run against
+  an unchanged source tree is a no-op (the `Force-push to
+  mirror` step exits without invoking `git push`); a run after
+  a real source change still rewrites SHAs through
+  `git filter-repo` and force-pushes the new history. The
+  permission has to be `true` for the latter case. The
+  incremental-filter work that would make genuine source
+  changes fast-forward instead of force-push is tracked
+  separately (see issue #122).
 - `restrictions: null` means GitHub uses repository-level push
   permissions. Because the deploy key is the only **non-admin**
   identity with write access (the repo is otherwise empty of
@@ -693,6 +758,12 @@ Next steps:
   3. Watch the run:      gh run watch (on push to main)
   4. Verify the mirror:  the contents on
      <owner>/<short>-public should match the dry-run tree.
+  5. Verify no-op runs:  re-trigger the workflow via
+     `gh workflow run public-mirror.yml --ref main` with no
+     intervening source changes. The `Force-push to mirror`
+     step should log `Mirror refs/heads/main already at
+     <sha>; nothing to push.` and a consumer clone's
+     `git pull` should report `Already up to date.`
 
 If the first real workflow run fails, common causes:
   - paths.allowlist references a path that doesn't exist in
