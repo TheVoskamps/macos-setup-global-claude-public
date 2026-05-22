@@ -195,7 +195,14 @@ runs `git worktree remove .claude/worktrees/<name>` to remove the
 worktree directory itself. Do this **serially across the wave**,
 not in parallel — see Anthropic issue
 [#48927](https://github.com/anthropics/claude-code/issues/48927)
-for a parallel-cleanup data-loss bug.
+for a parallel-cleanup data-loss bug. If `git worktree remove`
+fails with `fatal: cannot remove a locked working tree` and the
+lock reason matches the harness's standard end-state shape
+(`claude agent agent-<hash> (pid NNNN)`), that's a stale
+end-state lock from the returned subagent — unlock-then-remove is
+the canonical fix, not `--force`. See
+`~/.claude/rules/worktree-cleanup.md` for the full rule and the
+cases where unlock-then-remove is not allowed.
 
 ### Historical context
 
