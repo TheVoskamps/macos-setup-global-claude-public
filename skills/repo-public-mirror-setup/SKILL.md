@@ -265,7 +265,9 @@ Create the workflow file. It triggers on `push` to `main` and on
 `workflow_dispatch` for manual reruns. Steps: checkout full
 history, install `git-filter-repo`, clone a fresh bare copy, run
 the filter with `--paths-from-file` and `--mailmap`, regenerate
-`CONTRIBUTORS`, force-push to the mirror's `main`.
+`CONTRIBUTORS` (skipped when the blob is unchanged), and
+force-push to the mirror's `main` (skipped when the new local
+tip already equals the mirror's current tip).
 
 Use this template, substituting `<owner>/<short>-public` for the
 mirror's full name:
@@ -670,7 +672,16 @@ JSON
 Notes:
 
 - `allow_force_pushes: true` is intentional — the workflow
-  force-pushes filtered history on every run.
+  force-pushes filtered history whenever the new local tip
+  differs from the mirror's current tip. A workflow run against
+  an unchanged source tree is a no-op (the `Force-push to
+  mirror` step exits without invoking `git push`); a run after
+  a real source change still rewrites SHAs through
+  `git filter-repo` and force-pushes the new history. The
+  permission has to be `true` for the latter case. The
+  incremental-filter work that would make genuine source
+  changes fast-forward instead of force-push is tracked
+  separately (see issue #122).
 - `restrictions: null` means GitHub uses repository-level push
   permissions. Because the deploy key is the only **non-admin**
   identity with write access (the repo is otherwise empty of
@@ -741,6 +752,12 @@ Next steps:
   3. Watch the run:      gh run watch (on push to main)
   4. Verify the mirror:  the contents on
      <owner>/<short>-public should match the dry-run tree.
+  5. Verify no-op runs:  re-trigger the workflow via
+     `gh workflow run public-mirror.yml --ref main` with no
+     intervening source changes. The `Force-push to mirror`
+     step should log `Mirror refs/heads/main already at
+     <sha>; nothing to push.` and a consumer clone's
+     `git pull` should report `Already up to date.`
 
 If the first real workflow run fails, common causes:
   - paths.allowlist references a path that doesn't exist in
