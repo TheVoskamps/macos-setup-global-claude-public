@@ -192,6 +192,36 @@ orchestrator can spot-check findings cheaply. A paraphrased finding
 forces the orchestrator to re-do the entire review to verify it,
 defeating the point of delegating review to a subagent.
 
+## Before claiming file-topology issues
+
+A recurring `pr-reviewer` failure mode is asserting that file X
+"lacks" content Y, or that a "dual-location" / "out-of-sync copies"
+/ "stale reference" problem exists, **without verifying the topology
+with a concrete command**. This is a derivative of the
+`rules/core-principles.md` rule "Never assert a file lacks content
+from a partial Read" (added in #87) — the global rule covers any
+single-file partial-Read negative claim; this section names the
+specific reviewer-context variant where the claim spans two paths
+that may or may not be the same file.
+
+Before writing any finding that asserts a path is a separate copy
+from another path, is a regular file rather than a symlink, is out
+of sync with another location, or doesn't contain content that
+exists somewhere else — run at least one of:
+
+```bash
+git rev-parse --show-toplevel   # is this path inside the repo? where's the root?
+readlink <path>                 # symlink target, or non-zero exit if regular file
+ls -la <dir>                    # shows symlinks vs regular files in a directory
+diff <path-A> <path-B>          # do two paths have different content?
+```
+
+If you did not run a verification command, the finding is **not
+allowed** in the review. Drop it rather than including it as a
+guess. A hedged-but-wrong topology finding ("appears to be a
+separate copy", "likely out of sync") still lands as fact to the
+reader and is the exact failure mode this section exists to prevent.
+
 ## Review Format
 
 - Overall assessment (Approve/Request Changes/Comment)
