@@ -231,6 +231,24 @@ pattern; cross-check by branch or path), then:
 git worktree remove .claude/worktrees/<name>
 ```
 
+If that fails with `fatal: cannot remove a locked working tree` and
+the lock reason matches the harness's standard end-state shape
+(`claude agent agent-<hash> (pid NNNN)`), the subagent has returned
+and left a stale lock — this is routine end-of-wave cleanup, not an
+escalation. Unlock-then-remove:
+
+```bash
+git worktree unlock .claude/worktrees/<name>
+git worktree remove .claude/worktrees/<name>
+```
+
+See `~/.claude/rules/worktree-cleanup.md` for the full rule,
+including the cases where unlock-then-remove is **not** allowed
+(subagent still mid-run, lock reason doesn't match the standard
+harness shape, or the worktree has uncommitted work / unpushed
+commits — that last case is the genuine data-loss case and needs
+human approval).
+
 Track a "worktrees cleaned" count for the final report.
 
 **doc-updater spawn prompt** — give it PR number, issue number, branch name:
@@ -283,7 +301,10 @@ When a pr-reviewer reports back:
    ```
 
 3. After issue-fixer returns, remove its worktree
-   (`git worktree remove ...`) before spawning the next subagent.
+   (`git worktree remove ...`, or unlock-then-remove if the harness
+   left a stale end-state lock — see
+   `~/.claude/rules/worktree-cleanup.md`) before spawning the next
+   subagent.
 4. Spawn the pr-reviewer again for a follow-up review of the new
    changes.
 5. Repeat this loop up to 2 times (max 3 total reviews per PR).
@@ -399,20 +420,28 @@ To start the sequential queue, reply: "continue with <link-prefix>103"
   escalation to the human verbatim and wait for direction — not to
   repair the environment and resume. Specifically forbidden without
   explicit human approval:
-  - `git worktree remove -f` / `-f -f` (force-removing a locked
-    worktree)
+  - `git worktree remove -f` / `-f -f` against a worktree that has
+    uncommitted changes or unpushed commits (force-removing
+    real work). Force-remove is for data-loss cases only and
+    needs explicit approval for the data loss. Force-remove is
+    NOT the right tool for routine end-of-wave cleanup of a
+    locked worktree whose subagent has returned — use
+    `git worktree unlock` then plain `git worktree remove`
+    instead (see `~/.claude/rules/worktree-cleanup.md`).
   - `git branch -D` of a feature branch while a subagent still
     holds it
   - Resuming an escalated subagent via `SendMessage` (always
     re-dispatch fresh in the foreground if the human says retry)
-  - Any "obvious cleanup" that involves another subagent's worktree,
-    lock state, or branch claim
+  - Any cleanup that touches a worktree whose subagent is still
+    mid-run or escalated, or whose lock reason does not match the
+    standard harness shape (`claude agent agent-<hash> (pid NNNN)`).
 
-  The line is: if a subagent is involved (locked, escalated,
-  mid-run), the lifecycle decision belongs to the human. Cleanup of
-  *idle* worktrees the orchestrator created and tracks (no subagent
-  attached) remains allowed orchestration mechanics — see "What the
-  orchestrator IS allowed to do" below.
+  The line is: if a subagent is mid-run or escalated, the lifecycle
+  decision belongs to the human. Routine end-of-wave cleanup of a
+  *returned* subagent's worktree — including unlocking the harness's
+  stale end-state lock — is allowed orchestration mechanics; see
+  `~/.claude/rules/worktree-cleanup.md` for the canonical pattern
+  and "What the orchestrator IS allowed to do" below.
 - **Never run subagents in the background.** Permission requests and
   escalations need to bubble up to the human in real time. This
   covers both `run_in_background: true` on initial spawn AND
@@ -458,13 +487,20 @@ itself:
 - **Run git plumbing for orchestration mechanics.** `git fetch`,
   `git pull --ff-only` on long-lived branches it tracks (e.g. keeping
   `main` current in the primary clone after a merge),
-  `git worktree remove` (without `-f`) for cleanup of an *idle*
-  subagent worktree the orchestrator created and tracks (no subagent
-  still attached, no escalation pending), `git branch -D` for the
-  same idle case, `git push` of an agent's work that the agent
-  committed but couldn't push due to a credential prompt (rare).
-  Force-removal of a locked worktree, or any cleanup that touches a
-  subagent that's locked / escalated / mid-run, is a human decision
+  `git worktree remove` (without `-f`) for cleanup of a returned
+  subagent's worktree, `git worktree unlock <path>` followed by
+  `git worktree remove <path>` when the worktree carries the
+  harness's stale end-of-run lock (lock reason matches
+  `claude agent agent-<hash> (pid NNNN)` and the subagent has
+  returned — see `~/.claude/rules/worktree-cleanup.md`),
+  `git branch -D` for the same returned-subagent case, `git push`
+  of an agent's work that the agent committed but couldn't push
+  due to a credential prompt (rare). Force-removal (`-f` / `-f -f`)
+  is reserved for data-loss cases (uncommitted changes or unpushed
+  commits the user has chosen to discard) and needs explicit human
+  approval for the data loss. Any cleanup that touches a worktree
+  whose subagent is still mid-run, escalated, or whose lock reason
+  does not match the standard harness shape is a human decision
   (see "Never act on a subagent escalation without human input"
   above).
 - **Comment on a PR with orchestration metadata** — e.g. "closing

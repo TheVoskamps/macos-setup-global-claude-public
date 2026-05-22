@@ -21,3 +21,4 @@ This file provides core guidance to Claude Code across all projects.
 @~/.claude/rules/dependency-discipline.md
 @~/.claude/rules/label-uncertainty.md
 @~/.claude/rules/foreground-vs-background.md
+@~/.claude/rules/worktree-cleanup.md

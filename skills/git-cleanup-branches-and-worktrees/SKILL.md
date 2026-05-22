@@ -100,6 +100,21 @@ refer back to this callout rather than repeating the names.
 
       If either check fails, **skip the worktree** and report the
       reason. Do not force-remove.
+
+      If `git worktree remove` fails with `fatal: cannot remove a
+      locked working tree`, inspect the lock reason via
+      `git worktree list --porcelain`. If it matches the standard
+      harness shape `claude agent agent-<hash> (pid NNNN)` AND (the
+      PID is no longer alive (`kill -0 <pid>` fails) OR the branch
+      passed step 3's "merged + remote gone" gate (which is the case
+      here, since we're inside step 4)), this is a stale end-state
+      lock from a returned or crashed subagent — run
+      `git worktree unlock <path>` then re-run
+      `git worktree remove <path>` (no `--force`). See
+      `~/.claude/rules/worktree-cleanup.md`. If the lock reason does
+      not match the harness shape, or the uncommitted/unpushed check
+      above failed, skip and report — do not unlock and do not
+      force-remove.
    b. Delete the local branch (`git branch -D`).
       (Safe because step 3 already confirmed the PR was merged AND the
       remote branch is gone; `git branch -d` gives false negatives when
@@ -128,6 +143,23 @@ refer back to this callout rather than repeating the names.
       If both checks pass: remove the worktree (`git worktree remove`,
       no `--force`) and delete the local branch (`git branch -d`).
       If either check fails: skip and report the reason.
+
+      If `git worktree remove` fails with `fatal: cannot remove a
+      locked working tree`, inspect the lock reason via
+      `git worktree list --porcelain`. If the lock reason matches the
+      standard harness shape `claude agent agent-<hash> (pid NNNN)`
+      AND the PID in the lock reason is no longer alive
+      (`kill -0 <pid>` fails — the harness exited uncleanly or the
+      subagent has already returned), this is a stale end-state lock
+      and the canonical cleanup is `git worktree unlock <path>`
+      followed by `git worktree remove <path>` (no `--force`). See
+      `~/.claude/rules/worktree-cleanup.md`. If the lock reason does
+      not match the harness shape, or the PID is still alive (the
+      subagent may be mid-run), **skip and report** — do not unlock
+      a live subagent's worktree and do not force-remove. `--force`
+      remains reserved for the data-loss carve-out (uncommitted work
+      or unpushed commits the user has explicitly approved
+      discarding), not for bypassing a lock.
 
    b. **Pass 2 — orphan branch refs with no worktree.** Some
       `worktree-*` branches are left behind as local refs after their
