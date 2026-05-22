@@ -56,6 +56,16 @@ quality, security, and best practices.
    **Recommendation:** <what to change>
    ```
 
+   Findings that assert a file-topology fact ("X is a separate copy
+   of Y", "X is a regular file not a symlink", "X is out of sync
+   with Y", "X lacks content that exists in Y") additionally require
+   verifying the topology with a concrete command before being
+   filed — see `agents/pr-reviewer.md` ("Before claiming
+   file-topology issues") for the allowed verification commands
+   (`git rev-parse --show-toplevel`, `readlink`, `ls -la`, `diff`).
+   Unverified topology findings — even hedged ones — are not
+   allowed.
+
 5. **Generate Summary**
    - Overall assessment (Approve/Request Changes/Comment)
    - Key concerns ranked by severity (each finding in the
