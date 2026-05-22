@@ -344,6 +344,8 @@
       "WebFetch(domain:repost.aws)",
       "WebFetch(domain:karpenter.sh)",
       "WebSearch",
+      "Read(~/.claude/CLAUDE.md)",
+      "Read(~/.claude/rules/**)",
       "Read(.claude/worktrees/**)",
       "Edit(.claude/worktrees/**)",
       "Write(.claude/worktrees/**)",
