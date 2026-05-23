@@ -263,14 +263,19 @@ Replace `<short>` with the actual source short name when writing.
 
 Create the workflow file. It triggers on `push` to `main` and on
 `workflow_dispatch` for manual reruns. Steps: checkout full
-history, install `git-filter-repo`, clone a fresh bare copy, run
-the filter with `--paths-from-file` and `--mailmap`, regenerate
-`CONTRIBUTORS` (skipped when the blob is unchanged), and
-force-push to the mirror's `main` (skipped when the new local
-tip already equals the mirror's current tip).
+history, install `git-filter-repo`, clone a fresh bare copy, fetch
+the persisted `filter-repo-state` and `filter-repo-meta` branches
+from the mirror, run the filter with `--paths-from-file`,
+`--mailmap`, `--state-branch`, and `--prune-empty=never` (with a
+fingerprint check that triggers a full refilter when
+`paths.allowlist` or `mailmap` changes), regenerate `CONTRIBUTORS`
+(skipped when the blob is unchanged), and force-push to the
+mirror's `main` (skipped when the new local tip already equals the
+mirror's current tip) plus the two bookkeeping branches.
 
 Use this template, substituting `<owner>/<short>-public` for the
-mirror's full name:
+mirror's full name in both the remote URL near the end AND the
+`MIRROR_URL` env in the filter step:
 
 ```yaml
 name: public-mirror
@@ -324,18 +329,111 @@ jobs:
             IdentitiesOnly yes
           EOF
 
-      - name: Filter into a fresh bare clone
+      - name: Filter into a fresh bare clone with persisted marks
         env:
           CONF: ${{ github.workspace }}/.github/public-mirror
+          MIRROR_URL: git@github-mirror:<owner>/<short>-public.git
+          STATE_BRANCH: filter-repo-state
+          META_BRANCH: filter-repo-meta
         run: |
           set -euo pipefail
           WORK=$(mktemp -d)
           git clone --bare . "$WORK/src.git"
           cd "$WORK/src.git"
+          # Add the mirror remote here so we can fetch the persisted
+          # filter-repo state. The Force-push step reuses this same
+          # remote; both steps operate inside $FILTERED.
+          git remote add mirror "$MIRROR_URL"
+          # Compute a fingerprint of the filter inputs so we can
+          # detect config changes that invalidate the persisted marks.
+          # If paths.allowlist or mailmap changed since the last run,
+          # filter-repo's previously-computed SHAs no longer reflect
+          # the current filter, and we must refilter from scratch.
+          LIVE_FP=$(cat "$CONF/paths.allowlist" "$CONF/mailmap" \
+                    | sha256sum | awk '{print $1}')
+          echo "Live filter-input fingerprint: $LIVE_FP"
+          # Try to fetch the persisted state and meta branches from
+          # the mirror. Both are absent on the very first run; the
+          # `|| true` lets us fall through cleanly in that case.
+          # ls-remote does not write objects, so a failed lookup is
+          # cheap and harmless.
+          STATE_REMOTE_SHA=$(git ls-remote mirror "refs/heads/$STATE_BRANCH" | awk '{print $1}')
+          META_REMOTE_SHA=$(git ls-remote mirror "refs/heads/$META_BRANCH" | awk '{print $1}')
+          STORED_FP=""
+          if [ -n "$META_REMOTE_SHA" ]; then
+            git fetch mirror "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH"
+            STORED_FP=$(git show "refs/heads/$META_BRANCH:inputs.sha256" 2>/dev/null || true)
+            echo "Stored filter-input fingerprint: $STORED_FP"
+          else
+            echo "No meta branch on mirror yet (first run with --state-branch)."
+          fi
+          if [ -n "$STATE_REMOTE_SHA" ]; then
+            git fetch mirror "refs/heads/$STATE_BRANCH:refs/heads/$STATE_BRANCH"
+          else
+            echo "No state branch on mirror yet (first run with --state-branch)."
+          fi
+          # Decide whether to honor the persisted marks. We honor them
+          # only if both the state branch is present AND the fingerprint
+          # matches. Any mismatch (or missing meta) means stale marks:
+          # delete the local state branch so filter-repo starts clean,
+          # then write the new fingerprint. The push step at the end
+          # force-pushes the state and meta branches in lockstep.
+          REFILTER_REASON=""
+          if [ -z "$STATE_REMOTE_SHA" ]; then
+            REFILTER_REASON="first run (no state branch on mirror)"
+          elif [ -z "$STORED_FP" ]; then
+            REFILTER_REASON="meta branch missing or unreadable on mirror"
+          elif [ "$LIVE_FP" != "$STORED_FP" ]; then
+            REFILTER_REASON="filter inputs changed (paths.allowlist or mailmap edited)"
+          fi
+          if [ -n "$REFILTER_REASON" ]; then
+            echo "::warning::Refiltering from scratch: $REFILTER_REASON."
+            echo "::warning::This run will force-push the mirror's main and rewrite all public SHAs."
+            echo "::warning::Consumers of the mirror need a one-time 'git fetch && git reset --hard origin/main'."
+            # Delete the local state branch (if we fetched one) so
+            # filter-repo doesn't inherit stale marks. The first run
+            # case has no local branch to delete, hence `|| true`.
+            git update-ref -d "refs/heads/$STATE_BRANCH" || true
+          else
+            echo "Filter inputs unchanged; reusing persisted marks from state branch."
+          fi
+          # Run filter-repo. --state-branch persists fast-import marks
+          # so unchanged source commits keep their previously-computed
+          # public SHAs across runs. --prune-empty=never sidesteps a
+          # documented interaction (filter-repo source ~lines 2233-2249)
+          # where empty-commit pruning fights with --state-branch.
+          # Trade-off: source commits that touch only excluded paths
+          # appear in the public mirror as empty commits. Leaking
+          # activity timing on excluded paths is an accepted cost for
+          # SHA stability; the diff payload itself stays excluded.
           git filter-repo \
             --paths-from-file "$CONF/paths.allowlist" \
-            --mailmap "$CONF/mailmap"
+            --mailmap "$CONF/mailmap" \
+            --state-branch "$STATE_BRANCH" \
+            --prune-empty=never
+          # Write the live fingerprint into the meta branch so the
+          # next run can detect a config change. We build a fresh
+          # single-commit meta branch each run (history is meaningless
+          # here — only the current fingerprint matters), keeping the
+          # meta ref small and rebuildable. Pinned dates keep the SHA
+          # deterministic when the fingerprint hasn't changed, so a
+          # no-op meta push is a true no-op.
+          export GIT_INDEX_FILE="${RUNNER_TEMP}/meta-idx"
+          rm -f "$GIT_INDEX_FILE"
+          FP_BLOB=$(printf '%s\n' "$LIVE_FP" | git hash-object -w --stdin)
+          git update-index --add --cacheinfo "100644,$FP_BLOB,inputs.sha256"
+          META_TREE=$(git write-tree)
+          unset GIT_INDEX_FILE
+          META_COMMIT=$(GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' \
+                        GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' \
+                        git -c user.name='public-mirror' \
+                            -c user.email='public-mirror@<short>.local' \
+                          commit-tree "$META_TREE" \
+                          -m "filter-repo inputs fingerprint: $LIVE_FP")
+          git update-ref "refs/heads/$META_BRANCH" "$META_COMMIT"
           echo "FILTERED=$WORK/src.git" >> "$GITHUB_ENV"
+          echo "STATE_BRANCH=$STATE_BRANCH" >> "$GITHUB_ENV"
+          echo "META_BRANCH=$META_BRANCH" >> "$GITHUB_ENV"
 
       - name: Regenerate CONTRIBUTORS
         env:
@@ -394,9 +492,11 @@ jobs:
         run: |
           set -euo pipefail
           cd "$FILTERED"
-          git remote add mirror git@github-mirror:<owner>/<short>-public.git
+          # The mirror remote was added in the filter step (so that
+          # step could fetch the persisted state/meta branches). Reuse
+          # it here; do not re-add it.
           # Defense-in-depth: if the mirror's current refs/heads/main
-          # already matches our new tip, do not push. This catches
+          # already matches our new tip, do not push main. This catches
           # any case the CONTRIBUTORS short-circuit above misses (and
           # keeps no-op runs from moving the remote tip even if the
           # filter output is identical for some other reason).
@@ -409,10 +509,20 @@ jobs:
           # no refs/heads/main yet (bootstrap case — fall through to
           # the push so the mirror gets its first commit).
           if [ -n "$REMOTE_TIP" ] && [ "$LOCAL_TIP" = "$REMOTE_TIP" ]; then
-            echo "Mirror refs/heads/main already at $LOCAL_TIP; nothing to push."
-            exit 0
+            echo "Mirror refs/heads/main already at $LOCAL_TIP; nothing to push to main."
+          else
+            git push --force mirror refs/heads/main:refs/heads/main
           fi
-          git push --force mirror refs/heads/main:refs/heads/main
+          # Always push the state and meta branches. They are bookkeeping
+          # for the next run; their tips legitimately change every run
+          # that produces filter-repo work (state branch) or that recomputes
+          # the fingerprint (meta branch — same SHA when fingerprint is
+          # unchanged, so this is a true no-op then). Force-push because
+          # filter-repo may rewrite the state branch on a refilter, and
+          # the meta branch gets rebuilt fresh each run.
+          git push --force mirror \
+            "refs/heads/$STATE_BRANCH:refs/heads/$STATE_BRANCH" \
+            "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH"
 ```
 
 Notes on the template:
@@ -430,7 +540,8 @@ Notes on the template:
 - All temporary files live under `${RUNNER_TEMP}` (the
   GitHub-recommended runner temp dir), not `/tmp/`.
 - Replace `<short>` in the `user.email` and `<owner>/<short>-public`
-  in the remote URL with real values when writing the file.
+  in the remote URL (and in `MIRROR_URL` in the filter step) with
+  real values when writing the file.
 - `concurrency: public-mirror` prevents overlapping force-pushes if
   two pushes land on `main` close together.
 - The `Regenerate CONTRIBUTORS` step pins `GIT_AUTHOR_DATE` and
@@ -440,16 +551,37 @@ Notes on the template:
   also short-circuits when the freshly-generated `CONTRIBUTORS`
   blob already equals the one at `HEAD:CONTRIBUTORS`, leaving
   `refs/heads/main` at the filter-repo output unchanged.
+- The `Filter into a fresh bare clone with persisted marks` step
+  uses `git filter-repo --state-branch filter-repo-state` so the
+  fast-import marks (source-commit → public-commit SHA mapping)
+  persist between runs on a dedicated mirror branch. Unchanged
+  source commits keep their previously-computed public SHAs across
+  runs, which is what makes a consumer's `git pull` fast-forward
+  cleanly after a genuine source change instead of seeing the entire
+  public history rewritten. A sibling `filter-repo-meta` branch
+  holds a `inputs.sha256` fingerprint of `paths.allowlist` + `mailmap`;
+  on each run the live fingerprint is compared to the stored one,
+  and a mismatch triggers a full refilter (which is logged with a
+  GitHub `::warning::` annotation so the operator notices). The two
+  bookkeeping branches are pushed alongside `main` on every run.
+- `--prune-empty=never` is paired with `--state-branch` deliberately:
+  filter-repo's source warns that `--state-branch` does not work
+  well with empty-commit pruning. The trade-off is that source
+  commits which touch only excluded paths show up in the mirror as
+  empty commits. For this skill's use case (private repo → public
+  mirror) leaking activity timing on excluded paths is acceptable;
+  the excluded diff payload itself stays excluded.
 - The `Force-push to mirror` step compares the new local tip to the
-  mirror's current `refs/heads/main` (`git ls-remote`) and exits
-  without pushing when they match. This is defense in depth on top
-  of the CONTRIBUTORS short-circuit — together they ensure a
-  no-source-change workflow run does not move the mirror's tip,
-  which is what lets consumers do a normal `git pull` instead of
-  `git fetch && git reset --hard`. Note this only stabilises SHAs
-  across no-op runs; genuine upstream changes still cause
-  `git filter-repo` to re-derive descendant SHAs and force-push,
-  which is tracked separately (see issue #122).
+  mirror's current `refs/heads/main` (`git ls-remote`) and skips the
+  `main` push when they match. This is defense in depth on top of
+  the CONTRIBUTORS short-circuit — together with `--state-branch`
+  they make both no-source-change runs AND genuine-source-change
+  runs (where new commits add to the public tip without rewriting
+  history below) consumer-friendly. The state and meta branches are
+  always pushed (force) so the next run can read them back; when the
+  fingerprint is unchanged the meta-branch SHA is stable, so the
+  push is a true no-op even though the command is invoked
+  unconditionally.
 
 ## Step 8: Halt #2 — user populates `paths.allowlist`
 
@@ -677,17 +809,23 @@ JSON
 
 Notes:
 
-- `allow_force_pushes: true` is intentional — the workflow
-  force-pushes filtered history whenever the new local tip
-  differs from the mirror's current tip. A workflow run against
-  an unchanged source tree is a no-op (the `Force-push to
-  mirror` step exits without invoking `git push`); a run after
-  a real source change still rewrites SHAs through
-  `git filter-repo` and force-pushes the new history. The
-  permission has to be `true` for the latter case. The
-  incremental-filter work that would make genuine source
-  changes fast-forward instead of force-push is tracked
-  separately (see issue #122).
+- `allow_force_pushes: true` is intentional — the workflow uses
+  `git push --force` against the mirror. With
+  `--state-branch` keeping public SHAs stable across runs the
+  `main` push is usually a fast-forward in practice, but two
+  cases still require force:
+  - The first run after this skill is set up (no persisted state
+    yet) and any later run that detects a filter-input change
+    (`paths.allowlist` or `mailmap` edited) rebuilds the public
+    history from scratch — both will force-push `main` once.
+  - The bookkeeping branches (`filter-repo-state` and
+    `filter-repo-meta`) are always pushed with `--force` because
+    `filter-repo` may rewrite the state branch when marks are
+    invalidated, and the meta branch is rebuilt fresh each run.
+  Leaving `allow_force_pushes: true` covers all three cases. If
+  you want a stricter posture later, the only fully fast-forward
+  guarantee is on the `main` branch; the two bookkeeping branches
+  always need force.
 - `restrictions: null` means GitHub uses repository-level push
   permissions. Because the deploy key is the only **non-admin**
   identity with write access (the repo is otherwise empty of
@@ -758,12 +896,31 @@ Next steps:
   3. Watch the run:      gh run watch (on push to main)
   4. Verify the mirror:  the contents on
      <owner>/<short>-public should match the dry-run tree.
+     The first run logs a `::warning::Refiltering from scratch:
+     first run (no state branch on mirror)` annotation; this is
+     expected. The state and meta branches
+     (`filter-repo-state`, `filter-repo-meta`) appear on the
+     mirror after this run; subsequent runs reuse them.
   5. Verify no-op runs:  re-trigger the workflow via
      `gh workflow run public-mirror.yml --ref main` with no
      intervening source changes. The `Force-push to mirror`
      step should log `Mirror refs/heads/main already at
-     <sha>; nothing to push.` and a consumer clone's
+     <sha>; nothing to push to main.` and a consumer clone's
      `git pull` should report `Already up to date.`
+  6. Verify source-change runs are fast-forward:  land one new
+     commit on the source's `main`, watch the workflow, then on
+     the consumer clone run `git pull`. It should fast-forward
+     by exactly one commit (the new tip), NOT report a forced
+     update. The previous public history's SHAs are unchanged
+     because `--state-branch` reused them.
+
+When you later edit the filter config (paths.allowlist or
+mailmap), the next workflow run detects the input change via the
+fingerprint stored on filter-repo-meta, logs a warning
+"Refiltering from scratch: filter inputs changed", and
+force-pushes a rebuilt main. Tell consumers of the mirror to do
+a one-time `git fetch && git reset --hard origin/main` after a
+config-change run.
 
 If the first real workflow run fails, common causes:
   - paths.allowlist references a path that doesn't exist in
@@ -771,7 +928,9 @@ If the first real workflow run fails, common causes:
     or drop the entry)
   - mailmap has malformed entries (filter-repo logs the bad line)
   - deploy key lacks write scope (re-run gh repo deploy-key add
-    with --allow-write)
+    with --allow-write); the deploy key also needs write scope
+    to push the filter-repo-state and filter-repo-meta
+    bookkeeping branches alongside main.
 ```
 
 Then clean up the sandbox if the run succeeded:
