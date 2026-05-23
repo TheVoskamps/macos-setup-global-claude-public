@@ -352,17 +352,22 @@ jobs:
           LIVE_FP=$(cat "$CONF/paths.allowlist" "$CONF/mailmap" \
                     | sha256sum | awk '{print $1}')
           echo "Live filter-input fingerprint: $LIVE_FP"
-          # Try to fetch the persisted state and meta branches from
-          # the mirror. Both are absent on the very first run; the
-          # `|| true` lets us fall through cleanly in that case.
-          # ls-remote does not write objects, so a failed lookup is
-          # cheap and harmless.
-          STATE_REMOTE_SHA=$(git ls-remote mirror "refs/heads/$STATE_BRANCH" | awk '{print $1}')
-          META_REMOTE_SHA=$(git ls-remote mirror "refs/heads/$META_BRANCH" | awk '{print $1}')
+          # Probe the mirror for the persisted state and meta branches.
+          # Both are absent on the very first run. `git ls-remote` exits
+          # 0 with empty output when the ref does not exist, so the
+          # assignment safely yields an empty string and the
+          # `if [ -n "$..._REMOTE_SHA" ]` guards below handle the
+          # first-run case. ls-remote does not write objects, so a
+          # missing lookup is cheap and harmless.
+          STATE_REMOTE_SHA=$(git ls-remote mirror \
+            "refs/heads/$STATE_BRANCH" | awk '{print $1}')
+          META_REMOTE_SHA=$(git ls-remote mirror \
+            "refs/heads/$META_BRANCH" | awk '{print $1}')
           STORED_FP=""
           if [ -n "$META_REMOTE_SHA" ]; then
             git fetch mirror "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH"
-            STORED_FP=$(git show "refs/heads/$META_BRANCH:inputs.sha256" 2>/dev/null || true)
+            STORED_FP=$(git show \
+              "refs/heads/$META_BRANCH:inputs.sha256" 2>/dev/null || true)
             echo "Stored filter-input fingerprint: $STORED_FP"
           else
             echo "No meta branch on mirror yet (first run with --state-branch)."
@@ -388,8 +393,10 @@ jobs:
           fi
           if [ -n "$REFILTER_REASON" ]; then
             echo "::warning::Refiltering from scratch: $REFILTER_REASON."
-            echo "::warning::This run will force-push the mirror's main and rewrite all public SHAs."
-            echo "::warning::Consumers of the mirror need a one-time 'git fetch && git reset --hard origin/main'."
+            echo "::warning::This run will force-push the mirror's" \
+              "main and rewrite all public SHAs."
+            echo "::warning::Consumers of the mirror need a one-time" \
+              "'git fetch && git reset --hard origin/main'."
             # Delete the local state branch (if we fetched one) so
             # filter-repo doesn't inherit stale marks. The first run
             # case has no local branch to delete, hence `|| true`.
@@ -403,8 +410,11 @@ jobs:
           # documented interaction (filter-repo source ~lines 2233-2249)
           # where empty-commit pruning fights with --state-branch.
           # Trade-off: source commits that touch only excluded paths
-          # appear in the public mirror as empty commits. Leaking
-          # activity timing on excluded paths is an accepted cost for
+          # appear in the public mirror as empty commits with their
+          # original commit messages intact. This leaks two things
+          # about activity on excluded paths: the timing (commit dates)
+          # AND the commit message contents (which may name excluded
+          # directories or describe the change). The accepted cost for
           # SHA stability; the diff payload itself stays excluded.
           git filter-repo \
             --paths-from-file "$CONF/paths.allowlist" \
@@ -509,7 +519,8 @@ jobs:
           # no refs/heads/main yet (bootstrap case — fall through to
           # the push so the mirror gets its first commit).
           if [ -n "$REMOTE_TIP" ] && [ "$LOCAL_TIP" = "$REMOTE_TIP" ]; then
-            echo "Mirror refs/heads/main already at $LOCAL_TIP; nothing to push to main."
+            echo "Mirror refs/heads/main already at $LOCAL_TIP;" \
+              "nothing to push to main."
           else
             git push --force mirror refs/heads/main:refs/heads/main
           fi
@@ -568,9 +579,13 @@ Notes on the template:
   filter-repo's source warns that `--state-branch` does not work
   well with empty-commit pruning. The trade-off is that source
   commits which touch only excluded paths show up in the mirror as
-  empty commits. For this skill's use case (private repo → public
-  mirror) leaking activity timing on excluded paths is acceptable;
-  the excluded diff payload itself stays excluded.
+  empty commits with their original commit messages intact. For
+  this skill's use case (private repo → public mirror) leaking
+  both the timing AND the commit-message contents for changes
+  touching only excluded paths is acceptable; the excluded diff
+  payload itself stays excluded. Operators with commit messages
+  that themselves contain sensitive content should weigh this
+  carefully before adopting the skill.
 - The `Force-push to mirror` step compares the new local tip to the
   mirror's current `refs/heads/main` (`git ls-remote`) and skips the
   `main` push when they match. This is defense in depth on top of
