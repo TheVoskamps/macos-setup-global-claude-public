@@ -128,7 +128,7 @@ Use Lambda custom resources with AssumeRole:
 - Extract account ID from CodePipeline job event (`event['CodePipeline.job'].accountId`)
 - Use shared helper module for consistent cross-account logic
 - Cache credentials for warm Lambda container reuse (15-minute duration)
-- Create cross-account role (ExampleCrossAccountRole) in target account
+- Create cross-account role (`<OrgName>CodePipelineLambdaInvokerRole`) in target account
 - Trust Management account principal, grant PutJobSuccessResult/PutJobFailureResult
 
 ## AWS CLI Credentials
@@ -137,13 +137,13 @@ AWS CLI profiles are configured for IAM Identity Center SSO access with the form
 
 **Available profiles**:
 
-- `ExampleManagementAdmin-ACCOUNT` - Management account
-- `ExampleInfrastructureAdmin-ACCOUNT` - Shared Services account
-- `ExampleDevOpsAdmin-ACCOUNT` - DevOps account
-- `ExampleSandboxAdmin-ACCOUNT]` - Sandbox accounts
-- `ExampleIntegAdmin-ACCOUNT` - Integration account
-- `ExampleQaAdmin-ACCOUNT` - QA account
-- `ExampleProdAdmin-ACCOUNT` - Prod account
+- `<OrgName>ManagementAdmin-<ACCOUNT_ID>` - Management account
+- `<OrgName>InfrastructureAdmin-<ACCOUNT_ID>` - Shared Services account
+- `<OrgName>DevOpsAdmin-<ACCOUNT_ID>` - DevOps account
+- `<OrgName>SandboxAdmin-<ACCOUNT_ID>` - Sandbox accounts
+- `<OrgName>IntegAdmin-<ACCOUNT_ID>` - Integration account
+- `<OrgName>QaAdmin-<ACCOUNT_ID>` - QA account
+- `<OrgName>ProdAdmin-<ACCOUNT_ID>` - Prod account
 
 **Refreshing expired credentials**:
 
@@ -155,6 +155,9 @@ See `credential-surfaces.md` for the broader distinction between credential-prom
 
 To get access to kubectl in a specific workload account, run the following:
 
-aws eks update-kubeconfig --region us-west-2 --name example-cluster --profile <PROFILE>
+```bash
+aws eks update-kubeconfig --region us-west-2 --name <org>-backend-cluster-ec2 --profile <PROFILE>
+```
 
-Where PROFILE is one of the Workload admin accounts, e.g. ExampleIntegAdmin-ACCOUNT
+Where PROFILE is one of the Workload admin accounts, e.g.
+`<OrgName>IntegAdmin-<ACCOUNT_ID>`.

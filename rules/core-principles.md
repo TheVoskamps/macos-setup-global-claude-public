@@ -31,13 +31,13 @@
 
 **CRITICAL - REPOSITORY BOUNDARY ENFORCEMENT**:
 
-- **ONLY** make changes within `/path/to/repo/` and subdirectories
+- **ONLY** make changes within the current repository's root and its subdirectories
 - **NEVER** read, edit, or execute commands in any other directory
-- **NEVER** make changes to other repositories (example-infra-repo, example-other-repo, etc.)
+- **NEVER** make changes to other repositories or sibling projects
 - If a fix requires changes outside this repo, **SUGGEST** the fix but **DO NOT** implement it
 - If given access to other directories, **REFUSE** to make changes there
 
-**This repository is `example-app-repo`. All work stays here. Period.**
+**All work stays within the current repository. Period.**
 
 ### 1.5. PROPOSE BEFORE EDITING GLOBAL ~/.claude
 

@@ -33,7 +33,7 @@ This ensures full transparency and control over all changes to repositories.
 **ALWAYS use shared constants instead of hardcoding strings**:
 
 1. Define constants in a central place (e.g., `shared-constants.ts`)
-2. Use consistent naming conventions (e.g., project prefix like `example-`)
+2. Use consistent naming conventions (e.g., project prefix like `myproject-`)
 3. Reference constants everywhere instead of string literals
 4. When creating new resources, add their names to shared constants first
 
