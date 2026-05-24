@@ -241,8 +241,8 @@ forbidden patterns are:
 **What this rule prohibits:**
 
 - ❌ `Fixes #123`
-- ❌ `Closes example-org/repo#123`
-- ❌ `Resolves https://github.com/example-org/repo/issues/123`
+- ❌ `Closes owner/repo#123`
+- ❌ `Resolves https://github.com/owner/repo/issues/123`
 - ❌ `Closes Dependabot alert #88` (the parser ignores the
   "Dependabot alert" prefix and sees `Closes #88`)
 
