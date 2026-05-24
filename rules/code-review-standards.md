@@ -16,7 +16,7 @@
 
 ## Repo-Specific: No CodeQL / Code-Quality Scanning (this repo)
 
-This repo (`macos-setup-global-claude`) intentionally does NOT have
+This repo (`global-claude-config`) intentionally does NOT have
 CodeQL or code-quality scanning enabled. The content is markdown
 rules, agent definitions, and skills — there is no compiled or
 interpreted source code for CodeQL to meaningfully analyze, and the
@@ -47,7 +47,7 @@ results re-creates the phantom-check problem.
 To inspect the live ruleset state, run:
 
 ```text
-gh api repos/TheVoskamps/macos-setup-global-claude/rulesets/16051262
+gh api repos/TheVoskamps/global-claude-config/rulesets/16051262
 ```
 
 ## Cost Optimization

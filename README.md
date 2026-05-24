@@ -6,6 +6,6 @@ functionality.
 
 ## Read-only public mirror
 
-If you are reading this on `TheVoskamps/macos-setup-global-claude-public`,
+If you are reading this on `TheVoskamps/global-claude-config-public`,
 that repo is a **read-only public mirror**. Issues are welcome here; we
 triage and fix them in the upstream private repo. PRs are not accepted.

@@ -12,8 +12,8 @@ It also writes (but does not commit) filter config and a workflow
 file in the source repo.
 
 The first instance of this pattern is issue #26 in
-`TheVoskamps/macos-setup-global-claude` (creating
-`TheVoskamps/macos-setup-global-claude-public`). This skill codifies
+`TheVoskamps/global-claude-config` (creating
+`TheVoskamps/global-claude-config-public`). This skill codifies
 that pattern so it can be applied to other private repos without
 re-deriving the plumbing each time.
 
@@ -122,9 +122,9 @@ From the source repo, derive the conventional names:
 
 - **Source repo full name**: read with
   `gh repo view --json nameWithOwner -q .nameWithOwner` (e.g.
-  `TheVoskamps/macos-setup-global-claude`).
+  `TheVoskamps/global-claude-config`).
 - **Source repo short name**: the part after the slash (e.g.
-  `macos-setup-global-claude`).
+  `global-claude-config`).
 - **Mirror repo full name**: `<owner>/<short>-public`.
 - **Mailmap domain**: `<short>.local` (the `.local` TLD is
   RFC-reserved and non-routable; embedding the source short name
