@@ -340,10 +340,16 @@ jobs:
           WORK=$(mktemp -d)
           git clone --bare . "$WORK/src.git"
           cd "$WORK/src.git"
-          # Add the mirror remote here so we can fetch the persisted
-          # filter-repo state. The Force-push step reuses this same
-          # remote; both steps operate inside $FILTERED.
-          git remote add mirror "$MIRROR_URL"
+          # Deliberately do NOT add a named "mirror" remote here.
+          # git-filter-repo's freshness check (sanity_check, source
+          # ~lines 3461-3465 in 2.47.0) aborts the from-scratch path
+          # unless `git remote` outputs exactly "origin". A second
+          # named remote trips that guard. We therefore read the
+          # persisted state/meta branches by operating on $MIRROR_URL
+          # directly (ls-remote/fetch against a URL do not create a
+          # remote), run filter-repo while the clone is still pristine,
+          # and add the "mirror" remote only afterward (below) for the
+          # force-push step. See issue #144.
           # Compute a fingerprint of the filter inputs so we can
           # detect config changes that invalidate the persisted marks.
           # If paths.allowlist or mailmap changed since the last run,
@@ -353,19 +359,22 @@ jobs:
                     | sha256sum | awk '{print $1}')
           echo "Live filter-input fingerprint: $LIVE_FP"
           # Probe the mirror for the persisted state and meta branches.
-          # Both are absent on the very first run. `git ls-remote` exits
-          # 0 with empty output when the ref does not exist, so the
+          # We query $MIRROR_URL directly rather than via a named remote
+          # so the clone keeps exactly one remote ("origin") at the time
+          # filter-repo runs (see the freshness-check note above).
+          # Both branches are absent on the very first run. `git ls-remote`
+          # exits 0 with empty output when the ref does not exist, so the
           # assignment safely yields an empty string and the
           # `if [ -n "$..._REMOTE_SHA" ]` guards below handle the
           # first-run case. ls-remote does not write objects, so a
           # missing lookup is cheap and harmless.
-          STATE_REMOTE_SHA=$(git ls-remote mirror \
+          STATE_REMOTE_SHA=$(git ls-remote "$MIRROR_URL" \
             "refs/heads/$STATE_BRANCH" | awk '{print $1}')
-          META_REMOTE_SHA=$(git ls-remote mirror \
+          META_REMOTE_SHA=$(git ls-remote "$MIRROR_URL" \
             "refs/heads/$META_BRANCH" | awk '{print $1}')
           STORED_FP=""
           if [ -n "$META_REMOTE_SHA" ]; then
-            git fetch mirror "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH"
+            git fetch "$MIRROR_URL" "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH"
             STORED_FP=$(git show \
               "refs/heads/$META_BRANCH:inputs.sha256" 2>/dev/null || true)
             echo "Stored filter-input fingerprint: $STORED_FP"
@@ -373,7 +382,7 @@ jobs:
             echo "No meta branch on mirror yet (first run with --state-branch)."
           fi
           if [ -n "$STATE_REMOTE_SHA" ]; then
-            git fetch mirror "refs/heads/$STATE_BRANCH:refs/heads/$STATE_BRANCH"
+            git fetch "$MIRROR_URL" "refs/heads/$STATE_BRANCH:refs/heads/$STATE_BRANCH"
           else
             echo "No state branch on mirror yet (first run with --state-branch)."
           fi
@@ -421,6 +430,13 @@ jobs:
             --mailmap "$CONF/mailmap" \
             --state-branch "$STATE_BRANCH" \
             --prune-empty=never
+          # filter-repo has run and the freshness check is behind us, so
+          # it is now safe to add the named "mirror" remote. The
+          # Force-push step reuses this remote; both steps operate inside
+          # $FILTERED. (Adding it earlier would make `git remote` output
+          # two lines and abort filter-repo's from-scratch sanity check —
+          # see issue #144.)
+          git remote add mirror "$MIRROR_URL"
           # Write the live fingerprint into the meta branch so the
           # next run can detect a config change. We build a fresh
           # single-commit meta branch each run (history is meaningless
@@ -502,9 +518,12 @@ jobs:
         run: |
           set -euo pipefail
           cd "$FILTERED"
-          # The mirror remote was added in the filter step (so that
-          # step could fetch the persisted state/meta branches). Reuse
-          # it here; do not re-add it.
+          # The mirror remote was added in the filter step *after*
+          # filter-repo ran (it cannot exist before, or filter-repo's
+          # from-scratch freshness check aborts on a second remote — see
+          # issue #144). The state/meta branches were read earlier via
+          # the $MIRROR_URL directly, without a named remote. Reuse the
+          # remote here; do not re-add it.
           # Defense-in-depth: if the mirror's current refs/heads/main
           # already matches our new tip, do not push main. This catches
           # any case the CONTRIBUTORS short-circuit above misses (and
