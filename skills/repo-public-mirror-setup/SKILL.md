@@ -340,6 +340,22 @@ jobs:
           WORK=$(mktemp -d)
           git clone --bare . "$WORK/src.git"
           cd "$WORK/src.git"
+          # Set the bot identity once, repo-locally, on this bare clone.
+          # All commit-creating paths in this job draw from it: the
+          # meta-branch commit and the CONTRIBUTORS commit below, AND
+          # filter-repo's OWN internal --state-branch mark-saving commit
+          # (git_filter_repo.py's `git -C . commit-tree`, which carries
+          # no -c identity flags of its own). The GitHub-hosted runner
+          # has no git identity in any config scope or GIT_* env, so
+          # without this filter-repo's internal commit fails with
+          # "empty ident name" (see issue #147). Local scope (not
+          # --global) is the narrowest surface that works: filter-repo's
+          # commit-tree runs with cwd inside this clone, so git resolves
+          # identity from $WORK/src.git/config. The identity is rewritten
+          # by the mailmap pass, so the unverifiable .local email is by
+          # design (it is not meant to resolve to a real GitHub account).
+          git config user.name 'public-mirror'
+          git config user.email 'public-mirror@<short>.local'
           # Deliberately do NOT add a named "mirror" remote here.
           # git-filter-repo's freshness check (sanity_check, source
           # ~lines 3461-3465 in 2.47.0) aborts the from-scratch path
@@ -450,11 +466,13 @@ jobs:
           git update-index --add --cacheinfo "100644,$FP_BLOB,inputs.sha256"
           META_TREE=$(git write-tree)
           unset GIT_INDEX_FILE
+          # Identity comes from the clone's local git config (set in the
+          # filter step above); no inline -c flags needed. The pinned
+          # GIT_*_DATE env stays — it keeps this commit's SHA deterministic
+          # so an unchanged fingerprint yields a true no-op meta push.
           META_COMMIT=$(GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' \
                         GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' \
-                        git -c user.name='public-mirror' \
-                            -c user.email='public-mirror@<short>.local' \
-                          commit-tree "$META_TREE" \
+                        git commit-tree "$META_TREE" \
                           -m "filter-repo inputs fingerprint: $LIVE_FP")
           git update-ref "refs/heads/$META_BRANCH" "$META_COMMIT"
           echo "FILTERED=$WORK/src.git" >> "$GITHUB_ENV"
@@ -464,7 +482,6 @@ jobs:
       - name: Regenerate CONTRIBUTORS
         env:
           CONF: ${{ github.workspace }}/.github/public-mirror
-          BOT_EMAIL: public-mirror@<short>.local
         run: |
           set -euo pipefail
           cd "$FILTERED"
@@ -505,12 +522,16 @@ jobs:
           # wall-clock here would change the tip SHA on every run even
           # when nothing else changed, which is the root cause of the
           # spurious force-pushes consumers see.
+          # Identity comes from the clone's local git config, set in the
+          # filter step on the SAME bare clone we cd into here ($FILTERED
+          # == $WORK/src.git). Local config lives in that clone's config
+          # file and persists across run blocks, so this separate shell
+          # sees it; no inline -c flags needed. The pinned GIT_*_DATE env
+          # stays — it keeps the synthetic commit's SHA deterministic.
           HEAD_DATE=$(git show -s --format=%cI HEAD)
           NEW_HEAD=$(GIT_AUTHOR_DATE="$HEAD_DATE" \
                      GIT_COMMITTER_DATE="$HEAD_DATE" \
-                     git -c user.name='public-mirror' \
-                         -c user.email="$BOT_EMAIL" \
-                       commit-tree "$NEW_TREE" -p HEAD \
+                     git commit-tree "$NEW_TREE" -p HEAD \
                        -m 'Regenerate CONTRIBUTORS')
           git update-ref refs/heads/main "$NEW_HEAD"
 
@@ -572,6 +593,21 @@ Notes on the template:
 - Replace `<short>` in the `user.email` and `<owner>/<short>-public`
   in the remote URL (and in `MIRROR_URL` in the filter step) with
   real values when writing the file.
+- The bot git identity is set **once**, repo-locally, on the bare
+  clone (`git config user.name` / `user.email` right after the
+  `cd "$WORK/src.git"`), and every commit-creating path inherits it:
+  the meta-branch commit, the `CONTRIBUTORS` commit, and
+  filter-repo's own internal `--state-branch` mark-saving commit
+  (`git_filter_repo.py`'s `git -C . commit-tree`, which carries no
+  identity flags). Do not re-decorate individual `commit-tree` calls
+  with inline `-c user.name=… -c user.email=…` — that per-commit
+  pattern structurally cannot cover filter-repo's internal commit and
+  reintroduces issue #147 (`fatal: empty ident name`). Local scope
+  (not `--global`) is deliberate: filter-repo runs `commit-tree` with
+  cwd inside the clone, so git reads identity from the clone's local
+  `config`, and nothing outside the clone needs the identity. The
+  `.local` email is intentionally unverifiable — the `mailmap` pass
+  rewrites these bookkeeping commits' identities anyway.
 - `concurrency: public-mirror` prevents overlapping force-pushes if
   two pushes land on `main` close together.
 - The `Regenerate CONTRIBUTORS` step pins `GIT_AUTHOR_DATE` and
