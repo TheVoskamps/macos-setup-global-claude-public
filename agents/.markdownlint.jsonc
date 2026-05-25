@@ -1,0 +1,7 @@
+{
+  // Agent definition files lead with YAML front-matter (the harness reads
+  // `name:`/`description:`), not an H1, so MD041 (first-line-h1) does not
+  // apply here. It stays enabled repo-wide for prose docs via the root
+  // .markdownlint.jsonc.
+  "MD041": false
+}
