@@ -1,0 +1,6 @@
+{
+  // skills/lib/ holds H1-led prose docs (issue.md, repo-config.md), not
+  // front-matter skill definitions, so MD041 (first-line-h1) is re-enabled
+  // here, overriding the skills/ parent that disables it for SKILL.md files.
+  "MD041": true
+}
