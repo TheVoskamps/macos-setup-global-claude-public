@@ -95,7 +95,10 @@ CLAUDE_DIR="$HOME/.claude"
 # directory isn't a git repo.
 origin_url() {
     local dir="$1"
-    [[ -d "$dir/.git" ]] || return 0
+    # `.git` is a directory in a normal clone, but a regular FILE (a
+    # gitdir pointer) in a worktree or submodule checkout. Accept either
+    # so a worktree/submodule ~/.claude is still recognized as our clone.
+    [[ -e "$dir/.git" ]] || return 0
     git -C "$dir" config --get remote.origin.url 2>/dev/null || true
 }
 
@@ -247,8 +250,19 @@ main() {
         echo "Your previous ~/.claude/ contents are preserved at: $backup"
         echo "That backup is the recovery path; this script never deletes it."
         echo
-        echo "Files you had before were overlaid on top of the clone"
-        echo "(local wins) and show as dirty in 'git -C ~/.claude status'."
+        echo "Your previous files were overlaid on top of the clone (local wins)."
+        echo "Note that '$CLAUDE_DIR' is now a clone of the public mirror, which"
+        echo "carries its own .gitignore. So:"
+        echo "  - Overlaid files that the public mirror TRACKS (i.e. are not"
+        echo "    matched by that repo's .gitignore) will appear as modified or"
+        echo "    untracked in 'git -C ~/.claude status'."
+        echo "  - Your OTHER files (the ones that repo's .gitignore excludes -"
+        echo "    local state, projects/, caches, anything outside the shipped"
+        echo "    config set) were ALSO restored, but they will NOT show up in"
+        echo "    'git status' because that repo ignores them. That is expected,"
+        echo "    not a failure."
+        echo "The timestamped backup above remains the authoritative record of"
+        echo "everything you had."
     fi
     echo "$CLAUDE_DIR is now a live clone of the public mirror; update it with:"
     echo "  git -C \"$CLAUDE_DIR\" pull"
