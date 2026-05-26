@@ -64,7 +64,7 @@ with `fatal: bad revision` — cannot occur.
    The check is **PR merged AND remote branch is gone** — both must hold.
    "Issue closed and assigned to me" is **not** a sufficient signal: an
    issue can be closed without its PR ever merging, and an unmerged
-   branch may still hold work that hasn't landed on `main`.
+   branch may still hold work that hasn't landed on the default branch.
 
    ```bash
    gh pr list --state merged --head <branch> --json number,mergedAt
@@ -144,8 +144,8 @@ with `fatal: bad revision` — cannot occur.
       `worktree-*`. For each, run the safety check:
       - no uncommitted changes
       - no unpushed commits relative to `@{upstream}` (the branch's
-        own remote tracking ref). Do **not** compare against `main` —
-        feature/worktree branches are expected to diverge from `main`;
+        own remote tracking ref). Do **not** compare against the default
+        branch — feature/worktree branches are expected to diverge from it;
         what matters is whether the branch is fully pushed to its own
         remote.
 
