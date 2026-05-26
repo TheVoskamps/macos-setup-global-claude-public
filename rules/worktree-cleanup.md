@@ -46,10 +46,10 @@ least one** of the following holds:
 - The PID in the lock reason is no longer alive (`kill -0 <pid>`
   fails, or `ps -p <pid>` shows no process). This is the
   stale-lock case after a crashed harness.
-- The worktree's branch is fully merged into the repo's
-  default/long-lived branches (verified the same way
+- The worktree's branch is fully merged into the repo's default
+  branch (verified the same way
   `/git-cleanup-branches-and-worktrees` does it — merged PR + remote
-  branch gone, or `git rev-list <branch> ^<long-lived-set> --count`
+  branch gone, or `git rev-list <branch> ^<default-branch> --count`
   equals 0).
 
 …then the canonical cleanup is:
@@ -122,7 +122,7 @@ git -C <path> rev-list @{upstream}..HEAD   # empty = fully pushed
 # configured" on branches that were never pushed — common for the
 # harness's `worktree-agent-*` branches. Treat that failure as
 # "not verifiable as pushed" and skip-and-report, OR fall back to
-# a reachability check against the repo's long-lived set the way
+# a reachability check against the repo's default branch the way
 # `/git-cleanup-branches-and-worktrees` Pass 2 does (see
 # "Branch has no upstream configured, or the upstream is gone" in
 # `skills/git-cleanup-branches-and-worktrees/SKILL.md`).
