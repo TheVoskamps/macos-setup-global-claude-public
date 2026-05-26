@@ -9,41 +9,50 @@ Please clean up merged local branches (regardless of naming convention)
 and their worktrees, plus the throwaway worktrees that
 `isolation: worktree` subagents leave behind.
 
-## Long-lived branches (referenced from Steps 2, 5, and 9)
+## Protected branch (referenced from Steps 2, 5, and 9)
 
-These branches are **never** deleted by this skill and are always
-excluded from the merged-branch scan in Step 2. Step 5's orphan-
-branch reachability check (Pass 2) uses them as the "fully landed"
-yardstick. They are also the exact set Step 9 pulls forward at the
-end of the run:
+This skill protects exactly **one** branch: the repo's default
+branch, detected dynamically at runtime. That branch is **never**
+deleted by this skill and is always excluded from the merged-branch
+scan in Step 2. Step 5's orphan-branch reachability check (Pass 2)
+uses it as the "fully landed" yardstick. It is also the branch Step 9
+pulls forward at the end of the run.
 
-```text
-main, integ, test, sbx-edwin
+Do **not** hardcode branch names. Detect the default branch once at
+the start of the run and reuse it everywhere below as
+`$DEFAULT_BRANCH`:
+
+```bash
+# authoritative — the repo's configured default branch
+DEFAULT_BRANCH=$(gh repo view \
+  --json defaultBranchRef --jq '.defaultBranchRef.name')
+
+# fallback if gh is unavailable / non-GitHub: the remote's HEAD symref
+if [ -z "$DEFAULT_BRANCH" ]; then
+  DEFAULT_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD \
+    | sed 's@^refs/remotes/origin/@@')
+fi
 ```
 
-A repo that uses a different long-lived set must hand-edit **all
-three locations**: the prose list above, the matching `grep -Ev`
-regex in Step 2's bash snippet, **and** the
-`^main ^integ ^test ^sbx-edwin` arguments in Step 5b's
-`git rev-list` invocation. They must stay in sync, otherwise the
-skill could silently delete a long-lived branch or skip an orphan
-ref that is in fact fully landed.
-Concretely: if a repo uses `develop` instead of `integ` and only
-the prose list is updated, the regex still excludes `integ` (a
-branch that doesn't exist here) while letting `develop` through
-Step 2's enumeration as a deletion candidate. Steps 2, 5, and 9 all
-refer back to this callout rather than repeating the names.
+If neither form yields a non-empty branch name, **stop and report** —
+without a known protected branch the skill cannot safely decide what
+to delete. Everything other than `$DEFAULT_BRANCH` is a candidate
+subject to the existing gates (merged-PR + remote-gone for Step 3;
+reachability for Step 5b). Because the protected set is a single,
+guaranteed-to-exist ref, the previous failure mode — a hardcoded list
+naming branches the repo doesn't have, causing `git rev-list` to abort
+with `fatal: bad revision` — cannot occur.
 
 1. Run `git fetch --all --prune` to refresh tracking branches and
    remove stale remote refs.
-2. List all local branches **except** the long-lived set above:
+2. List all local branches **except** `$DEFAULT_BRANCH`:
 
    ```bash
    git for-each-ref --format='%(refname:short)' refs/heads/ \
-     | grep -Ev '^(main|integ|test|sbx-edwin)$'
+     | grep -v -x "$DEFAULT_BRANCH"
    ```
 
-   Filter out the long-lived set above. The remaining branches are
+   Filter out the protected branch. The remaining branches are
    candidates for the gate in Step 3 — this deliberately includes
    branches that don't match `issue-NNN-*` (e.g. `add-foo-skill`,
    `fix-bar-allowlist`, `update-settings-permissions`), because the
@@ -177,29 +186,38 @@ refer back to this callout rather than repeating the names.
       - **Branch has no upstream configured, or the upstream is gone**
         (the harness creates these refs but never pushes them, so
         `@{upstream}..HEAD` fails loudly rather than giving a clean
-        answer): fall back to a reachability check against the
-        long-lived set defined at the top of this file. Concretely:
+        answer): fall back to a reachability check against
+        `$DEFAULT_BRANCH` (detected at the top of this file).
+        Concretely:
 
         ```bash
-        git rev-list <branch> ^main ^integ ^test ^sbx-edwin --count
+        if count=$(git rev-list "<branch>" ^"$DEFAULT_BRANCH" --count); then
+          # rev-list succeeded; $count is trustworthy
+          :
+        else
+          # rev-list errored (bad revision, etc.) — cannot verify
+          count=""
+        fi
         ```
 
-        If the count is `0`, every commit on `<branch>` is already
-        reachable from at least one long-lived branch — the ref is
-        a stale starting point with no unique history, so deleting it
+        **Treat the `rev-list` exit status as authoritative.** Only act
+        on `$count` when the command exited `0`. A non-zero exit (bad
+        revision, etc.) must be read as "cannot verify — skip and
+        report," never as an empty-string-that-looks-like-zero count.
+        An errored `git rev-list` must NOT be allowed to read as "safe
+        to delete."
+
+        If `rev-list` succeeded and the count is `0`, every commit on
+        `<branch>` is already reachable from `$DEFAULT_BRANCH` — the ref
+        is a stale starting point with no unique history, so deleting it
         loses nothing. Delete with `git branch -D` (the `-D` form is
         required because the no-upstream state makes `git branch -d`
         refuse with "not fully merged" even though the commits are in
-        fact reachable from a long-lived branch).
+        fact reachable from the default branch).
 
-        If the count is non-zero, the branch has commits not on any
-        long-lived branch — skip and report so the human can
-        investigate before any history is dropped.
-
-      If a repo uses a different long-lived set, the
-      `^main ^integ ^test ^sbx-edwin` arguments above are one of the
-      three locations that must be kept in sync — see the
-      "Long-lived branches" callout at the top of this file.
+        If `rev-list` succeeded and the count is non-zero, the branch
+        has commits not on the default branch — skip and report so the
+        human can investigate before any history is dropped.
 
 6. Do **not** auto-clean nested worktrees
    (`.claude/worktrees/*/.claude/worktrees/`). If any are detected,
@@ -210,18 +228,17 @@ refer back to this callout rather than repeating the names.
 7. Run `git worktree prune` to clean up any stale worktree references.
 8. Run `git fetch --all --prune` again to refresh tracking branches and
    remove stale remote refs.
-9. For each long-lived branch in the set defined at the top of this
-   file that exists in this repo:
-   a. Check `git worktree list` first. If the target branch is
+9. Pull `$DEFAULT_BRANCH` (detected at the top of this file) forward:
+   a. Check `git worktree list` first. If `$DEFAULT_BRANCH` is
       currently checked out in another worktree (the harness sometimes
-      keeps a worktree on `main`), do **not** `git switch` to it from
-      the primary clone — git refuses to check out a branch claimed
-      by another worktree. Instead, update the existing checkout in
-      place: `git -C <that-path> pull --ff-only`.
+      keeps a worktree on the default branch), do **not** `git switch`
+      to it from the primary clone — git refuses to check out a branch
+      claimed by another worktree. Instead, update the existing
+      checkout in place: `git -C <that-path> pull --ff-only`.
       (Note: this `git -C` use is in *this script*, not in a subagent
       Bash call, so the subagent forbidden-form rule doesn't apply.)
-   b. If the branch is **not** checked out elsewhere:
-      - `git switch <branch-name>`
+   b. If `$DEFAULT_BRANCH` is **not** checked out elsewhere:
+      - `git switch "$DEFAULT_BRANCH"`
       - `git pull --ff-only`
 
 10. Final summary — report counts:
@@ -229,12 +246,12 @@ refer back to this callout rather than repeating the names.
     - Subagent worktrees removed (Step 5a / Pass 1)
     - Orphan `worktree-*` branch refs deleted (Step 5b / Pass 2),
       broken down by which path applied (upstream-empty vs.
-      no-upstream-reachable-from-long-lived-set)
+      no-upstream-reachable-from-default-branch)
     - Worktrees skipped, with reason for each (uncommitted changes,
       unpushed commits, nested worktree, etc.)
     - Orphan branch refs skipped, with reason for each (non-zero
-      reachability count, etc.)
-    - Default branches updated (which ones, which were updated in
-      place via `git -C`)
+      reachability count, rev-list could not verify, etc.)
+    - Default branch updated (and whether it was updated in place
+      via `git -C`)
 
     List anything that was skipped so the human can investigate.
