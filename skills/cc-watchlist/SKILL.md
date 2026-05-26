@@ -27,6 +27,14 @@ argument-hint: [extra-issue-numbers]
 | 27661 | Subagents (Task tool) should inherit parent session hooks/permissions | Open |
 | 54898 | Per-agent permission control gap (deny main agent, allow subagent) | Open |
 
+## C. `isolation: worktree` subagent isolation
+
+| # | Topic | Last known state |
+|---|---|---|
+| 62547 | Subagents silently write outside worktree via absolute `file_path` (Edit/Write hit primary clone, not worktree) | Open |
+| 52958 | Subagent `isolation: worktree` leaks cwd into parent checkout mid-session, destroying untracked files | Open |
+| 47548 | `isolation: worktree` switches parent worktree's branch instead of creating isolated worktree | Open |
+
 If `$ARGUMENTS` contains additional issue numbers (space-separated), append them to the list for this run.
 
 ## Execution rules
@@ -63,6 +71,16 @@ Shipped:
 Summary: N open, M shipped.
 
 ## B. Compound bash parsing & permissions harness
+
+Open:
+- ...
+
+Shipped:
+- ...
+
+Summary: N open, M shipped.
+
+## C. `isolation: worktree` subagent isolation
 
 Open:
 - ...
