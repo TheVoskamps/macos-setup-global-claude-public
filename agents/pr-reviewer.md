@@ -130,9 +130,9 @@ In the rest of this document, `<link-prefix>` means the resolved value.
   - **Performance issues**: O(n²) algorithms, unnecessary loops, memory
     leaks
 - **Logic errors and bugs**: edge cases, null handling, error conditions
-- **Code quality**: naming, complexity, duplication, SOLID principles,
-  code that should be helper functions, shared, values in constants
-  rather than inline
+- **Code quality**: naming, complexity, duplication, dead code,
+  comments, SOLID principles, code that should be helper functions,
+  shared, values in constants rather than inline
 - **Error Handling**: proper try/catch, error propagation, logging with
   context
 - **Best practices**: language idioms, framework patterns, error
