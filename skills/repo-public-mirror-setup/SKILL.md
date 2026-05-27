@@ -268,13 +268,17 @@ Create the workflow file. It triggers on `push` to `main` and on
 `workflow_dispatch` for manual reruns. Steps: checkout full
 history, install `git-filter-repo`, clone a fresh bare copy, fetch
 the persisted `filter-repo-state` and `filter-repo-meta` branches
-from the mirror, run the filter with `--paths-from-file`,
-`--mailmap`, `--state-branch`, and `--prune-empty=never` (with a
+from the mirror, fetch the mirror's `main` and `filter-repo-blobs`
+into local anchor refs (so all target-side objects referenced in
+`target-marks` are present for incremental runs), run the filter
+with `--paths-from-file`, `--mailmap`, `--state-branch`,
+`--prune-empty=never`, and `--refs refs/heads/main` (with a
 fingerprint check that triggers a full refilter when
-`paths.allowlist` or `mailmap` changes), regenerate `CONTRIBUTORS`
+`paths.allowlist` or `mailmap` changes), build a blob-anchor
+commit for unreachable replacement blobs, regenerate `CONTRIBUTORS`
 (skipped when the blob is unchanged), and force-push to the
 mirror's `main` (skipped when the new local tip already equals the
-mirror's current tip) plus the two bookkeeping branches.
+mirror's current tip) plus the three bookkeeping branches.
 
 Use this template, substituting `<owner>/<short>-public` for the
 mirror's full name in both the remote URL near the end AND the
@@ -405,6 +409,31 @@ jobs:
           else
             echo "No state branch on mirror yet (first run with --state-branch)."
           fi
+          # Fetch the mirror's main into a local anchor ref so all
+          # reachable target-side objects (commits, trees, blobs) are
+          # present in the bare clone's object store. Without these,
+          # filter-repo's --import-marks=target-marks fails with
+          # "fatal: object not found" because the target-marks SHAs are
+          # public-side objects that only exist on the mirror.
+          MIRROR_MAIN_SHA=$(git ls-remote "$MIRROR_URL" \
+            "refs/heads/main" | awk '{print $1}')
+          if [ -n "$MIRROR_MAIN_SHA" ]; then
+            git fetch "$MIRROR_URL" "refs/heads/main:refs/heads/_mirror_anchor"
+          else
+            echo "No main on mirror yet (first run); skipping anchor fetch."
+          fi
+          # Fetch the blob-anchor ref (if it exists) into a local ref.
+          # filter-repo's --replace-text creates scrubbed replacement
+          # blobs that get marks in target-marks but have no tree entry
+          # — they are unreachable from any ref. Without this anchor
+          # those blobs would be lost between runs.
+          BLOBS_SHA=$(git ls-remote "$MIRROR_URL" \
+            "refs/heads/filter-repo-blobs" | awk '{print $1}')
+          if [ -n "$BLOBS_SHA" ]; then
+            git fetch "$MIRROR_URL" "refs/heads/filter-repo-blobs:refs/heads/_target_blobs"
+          else
+            echo "No blob anchor on mirror yet (first run); skipping blob fetch."
+          fi
           # Decide whether to honor the persisted marks. We honor them
           # only if both the state branch is present AND the fingerprint
           # matches. Any mismatch (or missing meta) means stale marks:
@@ -448,7 +477,8 @@ jobs:
             --paths-from-file "$CONF/paths.allowlist" \
             --mailmap "$CONF/mailmap" \
             --state-branch "$STATE_BRANCH" \
-            --prune-empty=never
+            --prune-empty=never \
+            --refs refs/heads/main
           # filter-repo has run and the freshness check is behind us, so
           # it is now safe to add the named "mirror" remote. The
           # Force-push step reuses this remote; both steps operate inside
@@ -456,6 +486,39 @@ jobs:
           # two lines and abort filter-repo's from-scratch sanity check —
           # see issue #144.)
           git remote add mirror "$MIRROR_URL"
+          # Build a synthetic commit that anchors all target-mark blobs
+          # so they survive the next run's fetch. target-marks contains
+          # both commit and blob SHAs; use cat-file --batch-check to
+          # type-classify and build a tree from blobs only.
+          if git show "$STATE_BRANCH:target-marks" >/dev/null 2>&1; then
+            TYPES_FILE=$(mktemp)
+            git show "$STATE_BRANCH:target-marks" | awk '{print $2}' \
+              | git cat-file --batch-check='%(objectname) %(objecttype)' \
+              > "$TYPES_FILE"
+            UNEXPECTED=$(awk '$2 != "blob" && $2 != "commit" {print}' "$TYPES_FILE")
+            if [ -n "$UNEXPECTED" ]; then
+              echo "::error::Unexpected object types in target-marks:"
+              echo "$UNEXPECTED"
+              exit 1
+            fi
+            BLOB_COUNT=$(awk '$2 == "blob"' "$TYPES_FILE" | wc -l | tr -d ' ')
+            if [ "$BLOB_COUNT" -gt 0 ]; then
+              ANCHOR_TREE=$(awk \
+                '$2 == "blob" {printf "100644 blob %s\tmark-%d\n", $1, NR}' \
+                "$TYPES_FILE" | git mktree)
+              ANCHOR_COMMIT=$(GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' \
+                              GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' \
+                              git commit-tree "$ANCHOR_TREE" \
+                                -m "Anchor $BLOB_COUNT unreachable target-mark blobs")
+              git update-ref "refs/heads/filter-repo-blobs" "$ANCHOR_COMMIT"
+              echo "Built blob anchor: $BLOB_COUNT blobs, commit $ANCHOR_COMMIT"
+            else
+              echo "No blobs in target-marks; skipping blob anchor."
+            fi
+            rm -f "$TYPES_FILE"
+          else
+            echo "No target-marks in state branch; skipping blob anchor."
+          fi
           # Write the live fingerprint into the meta branch so the
           # next run can detect a config change. We build a fresh
           # single-commit meta branch each run (history is meaningless
@@ -621,16 +684,23 @@ jobs:
           else
             git push --force mirror refs/heads/main:refs/heads/main
           fi
-          # Always push the state and meta branches. They are bookkeeping
-          # for the next run; their tips legitimately change every run
-          # that produces filter-repo work (state branch) or that recomputes
-          # the fingerprint (meta branch — same SHA when fingerprint is
-          # unchanged, so this is a true no-op then). Force-push because
+          # Always push the state, meta, and blob-anchor branches. They
+          # are bookkeeping for the next run; their tips legitimately
+          # change every run that produces filter-repo work (state
+          # branch), recomputes the fingerprint (meta branch — same SHA
+          # when fingerprint is unchanged, so this is a true no-op then),
+          # or updates the target-mark blob set (blob anchor — same SHA
+          # when the blob set is unchanged). Force-push because
           # filter-repo may rewrite the state branch on a refilter, and
-          # the meta branch gets rebuilt fresh each run.
-          git push --force mirror \
-            "refs/heads/$STATE_BRANCH:refs/heads/$STATE_BRANCH" \
-            "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH"
+          # the meta branch gets rebuilt fresh each run. The blob-anchor
+          # push is conditional: the ref may not exist on the first run
+          # or when target-marks contains no blobs.
+          PUSH_REFS=("refs/heads/$STATE_BRANCH:refs/heads/$STATE_BRANCH"
+                     "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH")
+          if git show-ref --verify --quiet "refs/heads/filter-repo-blobs"; then
+            PUSH_REFS+=("refs/heads/filter-repo-blobs:refs/heads/filter-repo-blobs")
+          fi
+          git push --force mirror "${PUSH_REFS[@]}"
 ```
 
 Notes on the template:
@@ -692,12 +762,20 @@ Notes on the template:
   source commits keep their previously-computed public SHAs across
   runs, which is what makes a consumer's `git pull` fast-forward
   cleanly after a genuine source change instead of seeing the entire
-  public history rewritten. A sibling `filter-repo-meta` branch
+  public history rewritten. `--refs refs/heads/main` scopes
+  fast-export to walk only the source branch, not the fetched
+  anchor/blob refs; without it, filter-repo's default `--all` would
+  walk every ref in the clone, including the anchor refs whose
+  commits are target-side. A sibling `filter-repo-meta` branch
   holds a `inputs.sha256` fingerprint of `paths.allowlist` + `mailmap`;
   on each run the live fingerprint is compared to the stored one,
   and a mismatch triggers a full refilter (which is logged with a
-  GitHub `::warning::` annotation so the operator notices). The two
-  bookkeeping branches are pushed alongside `main` on every run.
+  GitHub `::warning::` annotation so the operator notices). A third
+  `filter-repo-blobs` branch anchors unreachable replacement blobs
+  created by `--replace-text` so they survive between runs. The
+  three bookkeeping branches are pushed alongside `main` on every
+  run (the blob-anchor push is conditional on blobs existing in
+  target-marks).
 - `--prune-empty=never` is paired with `--state-branch` deliberately:
   filter-repo's source warns that `--state-branch` does not work
   well with empty-commit pruning. The trade-off is that source
@@ -715,11 +793,13 @@ Notes on the template:
   the CONTRIBUTORS short-circuit — together with `--state-branch`
   they make both no-source-change runs AND genuine-source-change
   runs (where new commits add to the public tip without rewriting
-  history below) consumer-friendly. The state and meta branches are
-  always pushed (force) so the next run can read them back; when the
-  fingerprint is unchanged the meta-branch SHA is stable, so the
-  push is a true no-op even though the command is invoked
-  unconditionally.
+  history below) consumer-friendly. The state, meta, and blob-anchor
+  branches are always pushed (force) so the next run can read them
+  back; when the fingerprint is unchanged the meta-branch SHA is
+  stable, and when the blob set is unchanged the blob-anchor SHA is
+  stable, so those pushes are true no-ops. The blob-anchor push is
+  conditional on the ref existing (it may not exist on the first run
+  or when target-marks contains no blobs).
 
 ## Step 8: Halt #2 — user populates `paths.allowlist`
 
@@ -956,13 +1036,15 @@ Notes:
     yet) and any later run that detects a filter-input change
     (`paths.allowlist` or `mailmap` edited) rebuilds the public
     history from scratch — both will force-push `main` once.
-  - The bookkeeping branches (`filter-repo-state` and
-    `filter-repo-meta`) are always pushed with `--force` because
-    `filter-repo` may rewrite the state branch when marks are
-    invalidated, and the meta branch is rebuilt fresh each run.
-  Leaving `allow_force_pushes: true` covers all three cases. If
+  - The bookkeeping branches (`filter-repo-state`,
+    `filter-repo-meta`, and `filter-repo-blobs`) are always pushed
+    with `--force` because `filter-repo` may rewrite the state
+    branch when marks are invalidated, the meta branch is rebuilt
+    fresh each run, and the blob-anchor branch is rebuilt after each
+    filter-repo run.
+  Leaving `allow_force_pushes: true` covers all four cases. If
   you want a stricter posture later, the only fully fast-forward
-  guarantee is on the `main` branch; the two bookkeeping branches
+  guarantee is on the `main` branch; the three bookkeeping branches
   always need force.
 - `restrictions: null` means GitHub uses repository-level push
   permissions. Because the deploy key is the only **non-admin**
@@ -1036,9 +1118,10 @@ Next steps:
      <owner>/<short>-public should match the dry-run tree.
      The first run logs a `::warning::Refiltering from scratch:
      first run (no state branch on mirror)` annotation; this is
-     expected. The state and meta branches
-     (`filter-repo-state`, `filter-repo-meta`) appear on the
-     mirror after this run; subsequent runs reuse them.
+     expected. The state, meta, and blob-anchor branches
+     (`filter-repo-state`, `filter-repo-meta`,
+     `filter-repo-blobs`) appear on the mirror after this run;
+     subsequent runs reuse them.
   5. Verify no-op runs:  re-trigger the workflow via
      `gh workflow run public-mirror.yml --ref main` with no
      intervening source changes. The `Force-push to mirror`
@@ -1067,8 +1150,8 @@ If the first real workflow run fails, common causes:
   - mailmap has malformed entries (filter-repo logs the bad line)
   - deploy key lacks write scope (re-run gh repo deploy-key add
     with --allow-write); the deploy key also needs write scope
-    to push the filter-repo-state and filter-repo-meta
-    bookkeeping branches alongside main.
+    to push the filter-repo-state, filter-repo-meta, and
+    filter-repo-blobs bookkeeping branches alongside main.
 ```
 
 Then clean up the sandbox if the run succeeded:
