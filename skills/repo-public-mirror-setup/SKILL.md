@@ -435,11 +435,13 @@ jobs:
             echo "No blob anchor on mirror yet (first run); skipping blob fetch."
           fi
           # Decide whether to honor the persisted marks. We honor them
-          # only if both the state branch is present AND the fingerprint
-          # matches. Any mismatch (or missing meta) means stale marks:
-          # delete the local state branch so filter-repo starts clean,
-          # then write the new fingerprint. The push step at the end
-          # force-pushes the state and meta branches in lockstep.
+          # only if all three conditions hold: (1) the state branch is
+          # present, (2) the fingerprint matches, and (3) the SHAs in
+          # target-marks resolve in this clone. Any mismatch (or missing
+          # meta, or unresolvable marks) means stale marks: delete the
+          # local state branch so filter-repo starts clean, then write
+          # the new fingerprint. The push step at the end force-pushes
+          # the state and meta branches in lockstep.
           REFILTER_REASON=""
           if [ -z "$STATE_REMOTE_SHA" ]; then
             REFILTER_REASON="first run (no state branch on mirror)"
@@ -447,6 +449,23 @@ jobs:
             REFILTER_REASON="meta branch missing or unreadable on mirror"
           elif [ "$LIVE_FP" != "$STORED_FP" ]; then
             REFILTER_REASON="filter inputs changed (paths.allowlist or mailmap edited)"
+          fi
+          # Self-healing target-marks validation: verify that the SHAs
+          # in target-marks actually resolve in this clone. If any are
+          # missing, the marks are invalid for incremental use.
+          if [ -z "$REFILTER_REASON" ] && [ -n "$STATE_REMOTE_SHA" ]; then
+            if git show "$STATE_BRANCH:target-marks" >/dev/null 2>&1; then
+              MARK_SHAS=$(git show "$STATE_BRANCH:target-marks" | awk '{print $2}')
+              MISSING=$(echo "$MARK_SHAS" \
+                | git cat-file --batch-check='%(objectname) %(objecttype)' \
+                | grep ' missing$' || true)
+              if [ -n "$MISSING" ]; then
+                MISSING_COUNT=$(echo "$MISSING" | wc -l | tr -d ' ')
+                REFILTER_REASON="target-marks contain "\
+"$MISSING_COUNT unresolvable SHAs; "\
+"state branch is invalid for incremental use"
+              fi
+            fi
           fi
           if [ -n "$REFILTER_REASON" ]; then
             echo "::warning::Refiltering from scratch: $REFILTER_REASON."
