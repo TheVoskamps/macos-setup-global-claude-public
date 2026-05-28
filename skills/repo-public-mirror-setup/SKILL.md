@@ -241,7 +241,8 @@ header so the file exists. Do not invent entries.
 ### `CONTRIBUTORS.template`
 
 Write the header that the workflow concatenates with the
-regenerated `git shortlog -sne` body each run. Embed the literal
+regenerated `git shortlog -sne refs/heads/main` body each run
+(excluding the mirror bot). Embed the literal
 source short name in the upstream URL placeholder so the message
 makes sense in the mirror:
 
@@ -254,7 +255,8 @@ are not accepted in this mirror — see the upstream repo for the
 contribution process.
 
 The list below is regenerated on every workflow run from filtered
-`git shortlog -sne` against the rewritten history, so emails are
+`git shortlog -sne refs/heads/main` against the rewritten history
+(the mirror bot is excluded), so emails are
 in the `<localpart>@<short>.local` form.
 
 ---
@@ -577,7 +579,10 @@ jobs:
           {
             cat "$CONF/CONTRIBUTORS.template"
             echo
-            git shortlog -sne --all
+            # Exclude the public-mirror bot: it authors only the synthetic
+            # CONTRIBUTORS and .gitignore commits — including it creates a
+            # self-referential count loop (its count grows each run).
+            git shortlog -sne refs/heads/main | grep -vF 'public-mirror@<short>.local' || true
           } > "${RUNNER_TEMP}/CONTRIBUTORS"
           BLOB=$(git hash-object -w "${RUNNER_TEMP}/CONTRIBUTORS")
           # Short-circuit: if the freshly-generated CONTRIBUTORS blob
