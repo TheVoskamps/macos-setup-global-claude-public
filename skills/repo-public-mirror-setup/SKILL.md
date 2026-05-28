@@ -278,9 +278,10 @@ with `--paths-from-file`, `--mailmap`, `--state-branch`,
 fingerprint check that triggers a full refilter when
 `paths.allowlist` or `mailmap` changes), build a blob-anchor
 commit for unreachable replacement blobs, regenerate `CONTRIBUTORS`
-(skipped when the blob is unchanged), and force-push to the
-mirror's `main` (skipped when the new local tip already equals the
-mirror's current tip) plus the three bookkeeping branches.
+(skipped when the blob is unchanged), and push to the mirror's
+`main` (skipped when the new local tip already equals the mirror's
+current tip; force-pushed only on from-scratch refilters) plus the
+three bookkeeping branches (always force-pushed).
 
 Use this template, substituting `<owner>/<short>-public` for the
 mirror's full name in both the remote URL near the end AND the
@@ -374,7 +375,7 @@ jobs:
           # directly (ls-remote/fetch against a URL do not create a
           # remote), run filter-repo while the clone is still pristine,
           # and add the "mirror" remote only afterward (below) for the
-          # force-push step. See issue #144.
+          # push step. See issue #144.
           # Compute a fingerprint of the filter inputs so we can
           # detect config changes that invalidate the persisted marks.
           # If paths.allowlist or mailmap changed since the last run,
@@ -502,7 +503,7 @@ jobs:
             --refs refs/heads/main
           # filter-repo has run and the freshness check is behind us, so
           # it is now safe to add the named "mirror" remote. The
-          # Force-push step reuses this remote; both steps operate inside
+          # Push step reuses this remote; both steps operate inside
           # $FILTERED. (Adding it earlier would make `git remote` output
           # two lines and abort filter-repo's from-scratch sanity check —
           # see issue #144.)
@@ -565,6 +566,7 @@ jobs:
           echo "FILTERED=$WORK/src.git" >> "$GITHUB_ENV"
           echo "STATE_BRANCH=$STATE_BRANCH" >> "$GITHUB_ENV"
           echo "META_BRANCH=$META_BRANCH" >> "$GITHUB_ENV"
+          echo "REFILTER_REASON=$REFILTER_REASON" >> "$GITHUB_ENV"
 
       - name: Regenerate CONTRIBUTORS
         env:
@@ -590,8 +592,8 @@ jobs:
           # do not synthesize a new commit. Skipping the commit here
           # keeps refs/heads/main pointing at the filter-repo output,
           # so a no-source-change run produces a tip SHA identical to
-          # the previous run's tip and the force-push downstream
-          # becomes a no-op.
+          # the previous run's tip and the push downstream becomes
+          # a no-op (tip-equality short-circuit).
           HEAD_BLOB=$(git rev-parse --verify --quiet HEAD:CONTRIBUTORS || true)
           if [ -n "$HEAD_BLOB" ] && [ "$BLOB" = "$HEAD_BLOB" ]; then
             echo "CONTRIBUTORS unchanged (blob $BLOB); skipping synthetic commit."
@@ -679,7 +681,7 @@ jobs:
                        -m 'Synthesize .gitignore from paths.allowlist')
           git update-ref refs/heads/main "$NEW_HEAD"
 
-      - name: Force-push to mirror
+      - name: Push to mirror
         run: |
           set -euo pipefail
           cd "$FILTERED"
@@ -706,7 +708,13 @@ jobs:
             echo "Mirror refs/heads/main already at $LOCAL_TIP;" \
               "nothing to push to main."
           else
-            git push --force mirror refs/heads/main:refs/heads/main
+            if [ -n "$REFILTER_REASON" ]; then
+              echo "Refilter run — force-pushing main (history was rewritten)."
+              git push --force mirror refs/heads/main:refs/heads/main
+            else
+              echo "Incremental run — pushing main as fast-forward."
+              git push mirror refs/heads/main:refs/heads/main
+            fi
           fi
           # Always push the state, meta, and blob-anchor branches. They
           # are bookkeeping for the next run; their tips legitimately
@@ -811,19 +819,23 @@ Notes on the template:
   payload itself stays excluded. Operators with commit messages
   that themselves contain sensitive content should weigh this
   carefully before adopting the skill.
-- The `Force-push to mirror` step compares the new local tip to the
+- The `Push to mirror` step compares the new local tip to the
   mirror's current `refs/heads/main` (`git ls-remote`) and skips the
   `main` push when they match. This is defense in depth on top of
   the CONTRIBUTORS short-circuit — together with `--state-branch`
   they make both no-source-change runs AND genuine-source-change
   runs (where new commits add to the public tip without rewriting
-  history below) consumer-friendly. The state, meta, and blob-anchor
-  branches are always pushed (force) so the next run can read them
-  back; when the fingerprint is unchanged the meta-branch SHA is
-  stable, and when the blob set is unchanged the blob-anchor SHA is
-  stable, so those pushes are true no-ops. The blob-anchor push is
-  conditional on the ref existing (it may not exist on the first run
-  or when target-marks contains no blobs).
+  history below) consumer-friendly. When the tips differ, the step
+  checks `REFILTER_REASON`: on a from-scratch refilter (non-empty
+  reason) it force-pushes main (history was rewritten); on an
+  incremental run (empty reason) it pushes without `--force` so
+  consumers see a clean fast-forward. The state, meta, and
+  blob-anchor branches are always pushed (force) so the next run
+  can read them back; when the fingerprint is unchanged the
+  meta-branch SHA is stable, and when the blob set is unchanged the
+  blob-anchor SHA is stable, so those pushes are true no-ops. The
+  blob-anchor push is conditional on the ref existing (it may not
+  exist on the first run or when target-marks contains no blobs).
 
 ## Step 8: Halt #2 — user populates `paths.allowlist`
 
@@ -1148,7 +1160,7 @@ Next steps:
      subsequent runs reuse them.
   5. Verify no-op runs:  re-trigger the workflow via
      `gh workflow run public-mirror.yml --ref main` with no
-     intervening source changes. The `Force-push to mirror`
+     intervening source changes. The `Push to mirror`
      step should log `Mirror refs/heads/main already at
      <sha>; nothing to push to main.` and a consumer clone's
      `git pull` should report `Already up to date.`
