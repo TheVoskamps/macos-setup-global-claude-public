@@ -56,8 +56,13 @@ The caller passes:
 
 ### Step 1: Discover candidate Apps
 
-List GitHub Apps installed on the target repo's organization (or
-user account):
+List GitHub Apps installed on the target repo's organization or user
+account. The approach differs by owner type because the API
+endpoints and auth models differ.
+
+**Organization-owned repos** -- use the org installations endpoint
+(works with the user's `gh` token when the user has `admin:read`
+scope and is an org owner):
 
 ```bash
 gh api "/orgs/__GH_ORG__/installations" --jq \
@@ -65,14 +70,28 @@ gh api "/orgs/__GH_ORG__/installations" --jq \
    {id, app_slug, app_id, permissions}'
 ```
 
-If the org endpoint returns a 404 (user account, not an org), fall
-back to:
+If the org endpoint returns a 404 (owner is a user account, not an
+org), fall back to the **authenticated-user installations endpoint**:
 
 ```bash
-gh api "/users/__GH_ORG__/installations" --jq \
+gh api "/user/installations" --paginate --jq \
   '.installations[] |
+   select(.account.login == "__GH_ORG__") |
    {id, app_slug, app_id, permissions}'
 ```
+
+The `/user/installations` endpoint lists every GitHub App
+installation the authenticated user has explicit permission to
+access. The `select` filter narrows results to the target owner.
+This endpoint works with the standard `gh` user token -- no App JWT
+is needed.
+
+> **Note:** there is no `/users/{username}/installations` endpoint
+> in the GitHub REST API. The singular
+> `/users/{username}/installation` exists but requires App JWT
+> auth, which is not available at discovery time. The
+> `/user/installations` endpoint above is the correct user-token
+> alternative for personal accounts.
 
 Parse the JSON output into a list of candidate installations.
 
@@ -145,16 +164,40 @@ Three cases:
 ### Step 4: Verify installation on the target repo
 
 Confirm the chosen App is installed on the specific target repo (not
-just the org):
+just the org). There are two approaches depending on available auth.
+
+**Preferred (user-token path)** -- query the authenticated user's
+installations and check repository access. This works with the
+standard `gh` token:
+
+```bash
+gh api "/user/installations/{installation_id}/repositories" \
+  --paginate --jq \
+  '.repositories[] |
+   select(.full_name == "__GH_ORG__/__GH_REPO__") |
+   .full_name'
+```
+
+Where `{installation_id}` is the `id` from the candidate selected in
+Step 3. If the output is empty, the App is installed on the org but
+not configured for this specific repo.
+
+**Alternative (App JWT path)** -- if the skill has App JWT auth
+available (e.g. after `/gh-create-app` provisions the App), it can
+use the repo-specific endpoint:
 
 ```bash
 gh api "/repos/__GH_ORG__/__GH_REPO__/installation" \
   --jq '{id: .id, app_id: .app_id, app_slug: .app_slug}'
 ```
 
-If this returns a 404 or the returned `app_id` does not match the
-chosen App, the App is installed on the org but not configured for
-this repo. Report:
+> **Auth note:** this endpoint requires GitHub App JWT
+> authentication. A standard `gh` CLI call (which uses a user
+> token) returns 401. Only use this path when App JWT auth is
+> available. For discovery flows using user tokens, use the
+> preferred path above.
+
+If the repo is not covered by the installation, report:
 
 > GitHub App `<app_slug>` is installed on `<org>` but not configured
 > for `<org>/<repo>`. Update the App's repository access settings to
@@ -178,25 +221,48 @@ bypass actors, or any other integration that needs the App identity.
 ## User-supplied App name (skip discovery)
 
 A skill may accept an App name as an explicit input (e.g.
-`--app-name <slug>`). When provided, the skill skips Steps 1-3 and
-goes directly to verification:
+`--app-name <slug>`). When provided, the skill skips the
+multi-candidate discovery (Steps 1-3) and goes directly to
+verification:
 
-1. Look up the App by slug:
+1. Look up the App by slug using the authenticated user's
+   installations (works with the standard `gh` token):
 
    ```bash
-   gh api "/repos/__GH_ORG__/__GH_REPO__/installation" \
-     --jq '{id: .id, app_id: .app_id, app_slug: .app_slug}'
+   gh api "/user/installations" --paginate --jq \
+     '.installations[] |
+      select(.app_slug == "__APP_SLUG__") |
+      {id, app_slug, app_id, permissions}'
    ```
 
-2. Verify the returned `app_slug` matches the user-supplied name
-   (case-insensitive). If not, abort:
+   Where `__APP_SLUG__` is the user-supplied name (lowercase).
+   If no matching installation is returned, abort:
 
-   > The App installed on `<org>/<repo>` is `<actual_slug>`, not
-   > `<expected_slug>`. Check the App name and try again.
+   > No installation found for GitHub App `<slug>`. Verify the
+   > App name and that it is installed on an account you have
+   > access to.
+
+2. Verify the App is installed on the target repo using the
+   user-token path from Step 4:
+
+   ```bash
+   gh api "/user/installations/{installation_id}/repositories" \
+     --paginate --jq \
+     '.repositories[] |
+      select(.full_name == "__GH_ORG__/__GH_REPO__") |
+      .full_name'
+   ```
+
+   If the output is empty, the App exists but is not configured
+   for this repo. Abort:
+
+   > GitHub App `<slug>` is not configured for `<org>/<repo>`.
+   > Update the App's repository access settings to include this
+   > repo, then re-run the skill.
 
 3. Check that the App's permissions satisfy `required_permissions`
-   using the same logic as Step 2 above. If insufficient, abort with
-   the same "missing permissions" report.
+   using the same logic as Step 2 of the find/verify sequence. If
+   insufficient, abort with the same "missing permissions" report.
 
 4. Return the resolved identity (Step 5).
 
