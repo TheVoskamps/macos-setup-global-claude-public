@@ -54,3 +54,20 @@ In order:
 - It refuses to run when started from inside `~/.claude/` itself — once
   installed, update the canonical copy with `git -C ~/.claude pull`
   rather than re-running the installer.
+
+### Resync after a history rewrite
+
+Before May 27, 2026 (9:37 PM PDT), every mirror run rewrote the
+`CONTRIBUTORS` file — the shortlog walked bookkeeping refs whose
+commit count grew each run, producing a different blob every time.
+This caused a new synthetic commit on every run even when no real
+contributors changed. That is now fixed.
+
+If you cloned or pulled before that date, your local copy has the
+old history. A regular `git pull` will fail with a diverged-history
+error. Reset once to pick up the clean history:
+
+```sh
+git -C ~/.claude fetch origin
+git -C ~/.claude reset --hard origin/main
+```
