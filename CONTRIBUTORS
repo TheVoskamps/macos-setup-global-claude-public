@@ -6,16 +6,16 @@ are not accepted in this mirror — see the upstream repo for the
 contribution process.
 
 This is a **static informational file**, shipped to the mirror by
-`git-filter-repo` like any other allowlisted path. It is refreshed by
-hand when desired, by regenerating the filtered `git shortlog -sne`
-against the rewritten history (emails are in the
-`<localpart>@global-claude-config.local` form). It is no longer
-synthesized as a commit on top of filter-repo's output — see
-`.github/public-mirror/README.md` and issue #208 for why that change
-was made.
+`git-filter-repo` like any other allowlisted path. It deliberately
+does not embed a frozen contributor list: that data is reproducible
+from the repository's own history and would go stale on every commit.
+It is no longer synthesized as a commit on top of filter-repo's output
+— see `.github/public-mirror/README.md` and issue #208 for why.
 
----
+To list contributors from the current history, run:
 
-    91	Claude for Edwin Voskamp <claude-for-edwin@global-claude-config.local>
-    89	Edwin Voskamp <35160149+evoskamp@global-claude-config.local>
-    63	Edwin Voskamp <edwin.github.com@global-claude-config.local>
+    git shortlog -sne
+
+On the mirror, emails appear in the
+`<localpart>@global-claude-config.local` form (the source identities
+are rewritten during filtering).
