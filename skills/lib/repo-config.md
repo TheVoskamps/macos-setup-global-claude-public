@@ -7,9 +7,9 @@ skill) follows the patterns documented here when it loads the
 target repo's config. Individual readers reference this doc rather
 than re-deriving the parse rules or abort wording.
 
-The analogous library for the `/issue-*` namespace is
-`skills/lib/issue.md`; this file plays the same role for the
-repo-config file itself.
+The analogous libraries are `skills/lib/issue.md` (`/issue-*`
+shared reference) and `skills/lib/gh-app.md` (GitHub App resolver);
+this file plays the same role for the repo-config file itself.
 
 ## Current schema version
 
