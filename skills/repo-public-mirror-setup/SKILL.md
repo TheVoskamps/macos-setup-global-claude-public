@@ -20,6 +20,49 @@ re-deriving the plumbing each time.
 Follow the steps below in order. There are three explicit **halts**
 where you wait for the user before proceeding. Do not skip them.
 
+## Template payload
+
+The starter files this skill installs (the workflow, filter config,
+mirror `.gitignore`, `CONTRIBUTORS`, and the public-facing `LICENSE`,
+`PATENTS`, `PRIOR_ART.md`, `README.md`, and `pull_request_template.md`)
+live as templates under
+`~/.claude/global-claude-config/repo-public-mirror-setup/`, following
+the `.global-claude-config/` convention (see
+`.global-claude-config/README.md` for the placeholder/render/
+existence-check contract). The skill reads each template, substitutes
+the placeholders below, and writes the rendered result into the source
+repo. The skill does **not** carry the file bodies inline — it renders
+them from the payload.
+
+Placeholders used by this skill's templates:
+
+- `__GH_ORG__` — owner of the source repo. Inferred:
+  `gh repo view --json owner -q .owner.login`.
+- `__GH_REPO__` — source repo short name; also the
+  `__GH_REPO__-public` mirror name and the `__GH_REPO__.local`
+  mailmap domain. Inferred: `gh repo view --json name -q .name`.
+- `__GH_OWNER_NAME__` — human owner name in the `PATENTS` /
+  `PRIOR_ART.md` prior-art notice. Prompted from the user.
+- `__RELEASE_DATE__` — public-release date in the `PATENTS` /
+  `PRIOR_ART.md` prior-art notice. Prompted from the user.
+
+Render with simple string substitution (the
+`.global-claude-config/README.md` reference recipe), e.g. read a
+template via the `Read` tool, replace each `__PLACEHOLDER__` with its
+resolved value, and write the result with `Write`. Never write a
+rendered file that still contains a `__...__` placeholder — if any
+remains after inference and prompting, abort per the
+`.global-claude-config/README.md` "Resolving placeholder values" rule.
+
+## Workflow-auth identity
+
+This skill uses the **deploy-key** flow (Steps 15–16): a write-enabled
+deploy key on the mirror plus the `PUBLIC_MIRROR_DEPLOY_KEY` secret on
+the source. That flow is intact and is the supported path; this skill
+does **not** resolve a GitHub App identity via `skills/lib/gh-app.md`.
+The App resolver is only warranted if a future variant pushes via an
+App rather than a deploy key — out of scope here.
+
 ---
 
 ## Inputs
@@ -37,6 +80,32 @@ where you wait for the user before proceeding. Do not skip them.
 Everything else is derived by convention (see Step 4).
 
 ---
+
+## Step 0: Pre-flight — payload directory present
+
+Before anything else, confirm the template payload is installed:
+
+```bash
+test -d ~/.claude/global-claude-config/repo-public-mirror-setup
+```
+
+If the directory is missing, abort with the standard
+`.global-claude-config/README.md` existence-check message:
+
+> Payload directory
+> `~/.claude/global-claude-config/repo-public-mirror-setup/` not found.
+> Install via the public mirror first:
+>
+> ```text
+> git clone <mirror-url>
+> cd <mirror-repo>
+> ./.global-claude-config/install.sh
+> ```
+
+Treat `~/.claude/global-claude-config/repo-public-mirror-setup/` as
+`$PAYLOAD` for the rest of the skill. Every starter file the skill
+writes is rendered from a template under `$PAYLOAD` — the skill no
+longer carries those file bodies inline.
 
 ## Step 1: Pre-flight — repo root and visibility
 
@@ -161,184 +230,96 @@ proceed without confirmation.
 
 The remaining steps perform real work. Do not skip this halt.
 
-## Step 6: Write `.github/public-mirror/` config in the source repo
+## Step 6: Render `.github/public-mirror/` config in the source repo
 
-Create the directory `<repo-root>/.github/public-mirror/` if it
-does not exist, then write the three files below. These files are
-**not** committed by the skill — the user reviews the diff and
-commits manually, per global rule §0 ("never write/commit without
-approval").
+Create the directory `<repo-root>/.github/public-mirror/` if it does
+not exist, then render the files below **from the payload**
+(`$PAYLOAD`, set in Step 0). Each is a template under
+`$PAYLOAD/<file>`; read it, substitute the placeholders, and write the
+result to the target path. These files are **not** committed by the
+skill — the user reviews the diff and commits manually, per global
+rule §0 ("never write/commit without approval").
 
 ### `paths.allowlist`
 
-Newline-delimited path patterns passed to
-`git-filter-repo --paths-from-file`. Pre-list the required-files
-starting set (the user fills in the rest in Halt #2):
-
-```text
-# Allowlist for the public mirror.
-#
-# Lines starting with `#` and blank lines are ignored. Every other
-# line is a path or path prefix passed to `git-filter-repo
-# --paths-from-file`. Anything not matched is excluded from the
-# mirror (fail-safe for new sensitive files).
-#
-# The starting set below contains the files this skill requires to
-# be present in the mirror. Add repo-specific paths below the
-# marker. Audit additions carefully — paths NOT on this list are
-# excluded, but paths that ARE on this list ship verbatim.
-
-# --- required (do not remove) ---
-README.md
-LICENSE
-PATENTS
-PRIOR_ART.md
-CODEOWNERS
-CONTRIBUTORS
-.github/workflows/public-mirror.yml
-pull_request_template.md
-
-# Do NOT add the source repo's own root `.gitignore`, or most of
-# `.github/`. The source `.gitignore` un-ignores paths that exist in
-# the private repo but are deliberately EXCLUDED from the mirror, so a
-# consumer's `git status` would reference rules for paths absent from
-# their clone. The mirror ships a distinct, hand-maintained
-# `gitignore.mirror` (renamed to root `.gitignore` by the rename
-# directive below) instead. `.github/` is upstream-only plumbing — the
-# ONE exception is `.github/public-mirror/gitignore.mirror`.
-
-# --- repo-specific (add below) ---
-
-# --- mirror .gitignore: the ONE path under .github/ that survives ---
-# Select `.github/public-mirror/gitignore.mirror` AND rename it to
-# repo-root `.gitignore` on the mirror. filter-repo's
-# --paths-from-file consumes the `==>` rename directive inline. NOTE:
-# in the installed filter-repo version a rename directive does NOT by
-# itself select the source path — it selects *and* renames only when
-# the source path is ALSO present as a plain selection line, so list
-# the source path on its own line first, then the rename directive.
-.github/public-mirror/gitignore.mirror
-.github/public-mirror/gitignore.mirror==>.gitignore
-```
-
-Note that `CONTRIBUTORS` is shipped like any other allowlisted path
-(it is a static tracked file in the source repo — see the next
-section), and `.github/public-mirror/` is no longer wholesale on the
+Render `$PAYLOAD/paths.allowlist` (no placeholders) to
+`<repo-root>/.github/public-mirror/paths.allowlist` verbatim. It is the
+required-files starting set with an empty `--- repo-specific (add
+below) ---` section the user fills in at Halt #2. `CONTRIBUTORS` ships
+like any other allowlisted path (a static tracked file in the source
+repo — see below), and `.github/public-mirror/` is not wholesale on the
 allowlist: only `gitignore.mirror` survives, renamed to root
-`.gitignore`. Shipping both files through `git-filter-repo` (rather
-than synthesizing them as commits on top of filter-repo's output) is
-what keeps the mirror fast-forwarding on routine runs instead of
-diverging and force-pushing.
+`.gitignore` by the rename directive at the bottom of the template.
+Shipping both `CONTRIBUTORS` and the mirror `.gitignore` through
+`git-filter-repo` (rather than synthesizing them as commits on top of
+filter-repo's output) is what keeps the mirror fast-forwarding on
+routine runs instead of diverging and force-pushing.
 
 ### `mailmap`
 
-Seed from the source repo's unique authors. Run:
+Render `$PAYLOAD/mailmap` to
+`<repo-root>/.github/public-mirror/mailmap`, substituting
+`__GH_REPO__` with the source short name, then **seed the author
+entries** from the source repo's unique authors:
 
 ```bash
 git log --format='%aN <%aE>' | sort -u
 ```
 
-For each unique `Name <local@domain>` line, emit a mailmap entry
-that preserves the localpart and rewrites the domain to
-`<short>.local`:
+For each unique `Name <local@domain>` line, append a mailmap entry that
+preserves the localpart and rewrites the domain to `<short>.local`:
 
 ```text
 <Name> <local@<short>.local> <local@<original-domain>>
 ```
 
-Prepend a comment header:
-
-```text
-# Per-author mailmap used by the public-mirror workflow.
-#
-# Each line maps a private email to a `<localpart>@<short>.local`
-# form. The `.local` TLD is RFC-reserved and non-routable, and
-# embedding the source repo short name makes the mirror's origin
-# obvious. `git-filter-repo --mailmap` rewrites author/committer
-# emails on every filtered commit.
-#
-# Add a new entry here when a new author appears in the source repo.
-```
-
-If `git log` returns zero authors (empty repo), still write the
-header so the file exists. Do not invent entries.
+The template provides only the comment header (with `__GH_REPO__`
+already substituted). If `git log` returns zero authors (empty repo),
+write the header alone. Do not invent entries.
 
 ### `CONTRIBUTORS` (static, at the source repo root)
 
-`CONTRIBUTORS` is a **static tracked file** at the source repo root.
-It ships to the mirror like any other allowlisted path. It is NOT
-synthesized at runtime: an earlier design regenerated it as a commit
-stacked on top of filter-repo's output, which sat outside
-filter-repo's persisted state and made every source-change run diverge
-from the previous mirror tip and force-push, breaking consumers'
-`git pull`. Shipping it as a normal tracked file removes that synth
-step entirely.
-
-Write it at `$REPO_ROOT/CONTRIBUTORS`. The body is a one-time
-(refreshed by hand when desired) `git shortlog -sne refs/heads/main`
-against the rewritten history, with the mirror bot excluded. Embed the
-literal source short name in the upstream URL placeholder so the
-message makes sense in the mirror:
-
-```text
-# Contributors
-
-This file is part of a **read-only public mirror**. All commits
-originate upstream in the private source repository. Contributions
-are not accepted in this mirror — see the upstream repo for the
-contribution process.
-
-This is a **static informational file**, shipped to the mirror by
-`git-filter-repo` like any other allowlisted path. Refresh it by hand
-when desired, by regenerating the filtered `git shortlog -sne` against
-the rewritten history (emails are in the `<localpart>@<short>.local`
-form). It is no longer synthesized as a commit on top of filter-repo's
-output.
-
----
-```
-
-Replace `<short>` with the actual source short name when writing. The
-source repo must **track** this file — if the source `.gitignore`
-ignores root-level files by default, add an explicit `!/CONTRIBUTORS`
-un-ignore so it is committed and therefore ships.
+Render `$PAYLOAD/CONTRIBUTORS.template` to `$REPO_ROOT/CONTRIBUTORS`,
+substituting `__GH_REPO__` with the source short name. `CONTRIBUTORS`
+is a **static tracked file** at the source repo root; it ships to the
+mirror like any other allowlisted path and is NOT synthesized at
+runtime (an earlier design regenerated it as a commit stacked on top of
+filter-repo's output, which sat outside filter-repo's persisted state
+and made every source-change run diverge from the previous mirror tip
+and force-push, breaking consumers' `git pull`). The source repo must
+**track** this file — if the source `.gitignore` ignores root-level
+files by default, add an explicit `!/CONTRIBUTORS` un-ignore so it is
+committed and therefore ships.
 
 ### `gitignore.mirror` (the mirror's root `.gitignore`)
 
-Write `.github/public-mirror/gitignore.mirror`: the **static** root
-`.gitignore` for the mirror. The rename directive in `paths.allowlist`
-selects it and renames it to repo-root `.gitignore` on the mirror, so
-it ships inside `git-filter-repo`'s own commit — not as a synthesized
-post-filter commit.
+Render `$PAYLOAD/gitignore.mirror` (no placeholders) to
+`<repo-root>/.github/public-mirror/gitignore.mirror`: the **static**
+root `.gitignore` for the mirror. The rename directive in
+`paths.allowlist` selects it and renames it to repo-root `.gitignore`
+on the mirror, so it ships inside `git-filter-repo`'s own commit — not
+as a synthesized post-filter commit.
 
 The mirror needs its OWN `.gitignore` rather than the source repo's:
 the source `.gitignore` un-ignores paths that exist privately but are
 deliberately excluded from the mirror, so shipping it would leave a
 consumer's `git status` referencing rules for paths absent from their
-clone. `gitignore.mirror` un-ignores exactly the mirror's shipped set
-plus the `.gitignore` itself, so a user who clones the mirror beneath
-`~/.claude` gets a clean `git status`.
+clone. The template un-ignores exactly the required shipped set plus
+the `.gitignore` itself. Keep it in sync **by hand** with
+`paths.allowlist`: when the user adds a repo-specific shipped path at
+Halt #2, add or remove the matching `!/<path>` line here (and a
+recursive `!/<dir>**` line for directories). It is part of the input
+fingerprint (see Step 7), so editing it correctly triggers a refilter.
 
-Keep it in sync **by hand** with `paths.allowlist`: when you add or
-remove a shipped path there, add or remove the matching `!/<path>`
-line here. It is part of the input fingerprint (see Step 7), so
-editing it correctly triggers a refilter. Pattern:
+### `replacements.txt` (optional identifier scrubbing)
 
-```text
-# Ignore everything by default, then un-ignore shipped files.
-/*
+Render `$PAYLOAD/replacements.txt` (no placeholders) to
+`<repo-root>/.github/public-mirror/replacements.txt`. The template
+ships with no concrete rules — redaction rules are inherently
+repo-specific. A mirror with no sensitive identifiers in history may
+leave it rule-free; the allowlist filter is the primary fail-safe.
 
-# The .gitignore itself must not be ignored.
-!/.gitignore
-
-# Shipped paths (keep in sync with paths.allowlist):
-!/README.md
-!/LICENSE
-# ... one `!/<path>` line per shipped path; directories also get
-# a recursive `!/<dir>**` line so nested contents are un-ignored.
-```
-
-## Step 7: Write `.github/workflows/public-mirror.yml`
+## Step 7: Render `.github/workflows/public-mirror.yml`
 
 Create the workflow file. It triggers on `push` to `main` and on
 `workflow_dispatch` for manual reruns. Steps: checkout full
@@ -347,10 +328,11 @@ the persisted `filter-repo-state` and `filter-repo-meta` branches
 from the mirror, fetch the mirror's `main` and `filter-repo-blobs`
 into local anchor refs (so all target-side objects referenced in
 `target-marks` are present for incremental runs), run the filter
-with `--paths-from-file`, `--mailmap`, `--state-branch`,
-`--prune-empty=never`, and `--refs refs/heads/main` (with a
-fingerprint check that triggers a full refilter when
-`paths.allowlist`, `mailmap`, or `gitignore.mirror` changes), build a
+with `--paths-from-file`, `--mailmap`, `--replace-text`,
+`--replace-message`, `--state-branch`, `--prune-empty=never`, and
+`--refs refs/heads/main` (with a fingerprint check that triggers a
+full refilter when `paths.allowlist`, `mailmap`, `gitignore.mirror`,
+or the `replacements.txt` rule set changes), build a
 blob-anchor commit for unreachable replacement blobs, and push to the
 mirror's `main` (skipped when the new local tip already equals the
 mirror's current tip; force-pushed only on from-scratch refilters,
@@ -360,365 +342,14 @@ tracked file and `gitignore.mirror` is renamed to root `.gitignore` —
 both through `git-filter-repo` itself, so there are no post-filter
 synth steps.
 
-Use this template, substituting `<owner>/<short>-public` for the
-mirror's full name in both the remote URL near the end AND the
-`MIRROR_URL` env in the filter step:
-
-```yaml
-name: public-mirror
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-concurrency:
-  group: public-mirror
-  cancel-in-progress: false
-
-jobs:
-  mirror:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source (full history)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install git-filter-repo
-        run: |
-          python3 -m pip install --user git-filter-repo
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Set up SSH deploy key
-        env:
-          DEPLOY_KEY: ${{ secrets.PUBLIC_MIRROR_DEPLOY_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_mirror
-          chmod 600 ~/.ssh/id_mirror
-          # NOTE: ssh-keyscan is TOFU (Trust-On-First-Use) — the very
-          # first run trusts whatever key the GitHub IP returns. The
-          # GitHub-hosted runner is reaching GitHub from inside the
-          # same provider's network on every run, so the practical
-          # attack surface is narrow, but pinning is stronger. If
-          # this workflow is ever ported off GitHub-hosted runners,
-          # replace this line with pinned host keys fetched from
-          # https://api.github.com/meta (the `ssh_keys` field, with
-          # the connection itself trusted via TLS PKI).
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          cat >> ~/.ssh/config <<EOF
-          Host github-mirror
-            HostName github.com
-            User git
-            IdentityFile ~/.ssh/id_mirror
-            IdentitiesOnly yes
-          EOF
-
-      - name: Filter into a fresh bare clone with persisted marks
-        env:
-          CONF: ${{ github.workspace }}/.github/public-mirror
-          MIRROR_URL: git@github-mirror:<owner>/<short>-public.git
-          STATE_BRANCH: filter-repo-state
-          META_BRANCH: filter-repo-meta
-        run: |
-          set -euo pipefail
-          WORK=$(mktemp -d)
-          git clone --bare . "$WORK/src.git"
-          cd "$WORK/src.git"
-          # Set the bot identity once, repo-locally, on this bare clone.
-          # All commit-creating paths in this job draw from it: the
-          # meta-branch commit and the blob-anchor commit below, AND
-          # filter-repo's OWN internal --state-branch mark-saving commit
-          # (git_filter_repo.py's `git -C . commit-tree`, which carries
-          # no -c identity flags of its own). The GitHub-hosted runner
-          # has no git identity in any config scope or GIT_* env, so
-          # without this filter-repo's internal commit fails with
-          # "empty ident name" (see issue #147). Local scope (not
-          # --global) is the narrowest surface that works: filter-repo's
-          # commit-tree runs with cwd inside this clone, so git resolves
-          # identity from $WORK/src.git/config. The identity is rewritten
-          # by the mailmap pass, so the unverifiable .local email is by
-          # design (it is not meant to resolve to a real GitHub account).
-          git config user.name 'public-mirror'
-          git config user.email 'public-mirror@<short>.local'
-          # Deliberately do NOT add a named "mirror" remote here.
-          # git-filter-repo's freshness check (sanity_check, source
-          # ~lines 3461-3465 in 2.47.0) aborts the from-scratch path
-          # unless `git remote` outputs exactly "origin". A second
-          # named remote trips that guard. We therefore read the
-          # persisted state/meta branches by operating on $MIRROR_URL
-          # directly (ls-remote/fetch against a URL do not create a
-          # remote), run filter-repo while the clone is still pristine,
-          # and add the "mirror" remote only afterward (below) for the
-          # push step. See issue #144.
-          # Compute a fingerprint of the filter inputs so we can
-          # detect config changes that invalidate the persisted marks.
-          # If paths.allowlist, mailmap, or gitignore.mirror changed
-          # since the last run, filter-repo's previously-computed SHAs no
-          # longer reflect the current filter, and we must refilter from
-          # scratch. gitignore.mirror is MANDATORY in the fingerprint:
-          # its content becomes the mirror's root `.gitignore` blob via
-          # the rename directive in paths.allowlist, yet editing it does
-          # NOT change paths.allowlist — without hashing it here, the
-          # marks would be reused and the mirror's `.gitignore` would go
-          # silently stale relative to gitignore.mirror.
-          LIVE_FP=$(cat "$CONF/paths.allowlist" "$CONF/mailmap" \
-                    "$CONF/gitignore.mirror" \
-                    | sha256sum | awk '{print $1}')
-          echo "Live filter-input fingerprint: $LIVE_FP"
-          # Probe the mirror for the persisted state and meta branches.
-          # We query $MIRROR_URL directly rather than via a named remote
-          # so the clone keeps exactly one remote ("origin") at the time
-          # filter-repo runs (see the freshness-check note above).
-          # Both branches are absent on the very first run. `git ls-remote`
-          # exits 0 with empty output when the ref does not exist, so the
-          # assignment safely yields an empty string and the
-          # `if [ -n "$..._REMOTE_SHA" ]` guards below handle the
-          # first-run case. ls-remote does not write objects, so a
-          # missing lookup is cheap and harmless.
-          STATE_REMOTE_SHA=$(git ls-remote "$MIRROR_URL" \
-            "refs/heads/$STATE_BRANCH" | awk '{print $1}')
-          META_REMOTE_SHA=$(git ls-remote "$MIRROR_URL" \
-            "refs/heads/$META_BRANCH" | awk '{print $1}')
-          STORED_FP=""
-          if [ -n "$META_REMOTE_SHA" ]; then
-            git fetch "$MIRROR_URL" "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH"
-            STORED_FP=$(git show \
-              "refs/heads/$META_BRANCH:inputs.sha256" 2>/dev/null || true)
-            echo "Stored filter-input fingerprint: $STORED_FP"
-          else
-            echo "No meta branch on mirror yet (first run with --state-branch)."
-          fi
-          if [ -n "$STATE_REMOTE_SHA" ]; then
-            git fetch "$MIRROR_URL" "refs/heads/$STATE_BRANCH:refs/heads/$STATE_BRANCH"
-          else
-            echo "No state branch on mirror yet (first run with --state-branch)."
-          fi
-          # Fetch the mirror's main into a local anchor ref so all
-          # reachable target-side objects (commits, trees, blobs) are
-          # present in the bare clone's object store. Without these,
-          # filter-repo's --import-marks=target-marks fails with
-          # "fatal: object not found" because the target-marks SHAs are
-          # public-side objects that only exist on the mirror.
-          MIRROR_MAIN_SHA=$(git ls-remote "$MIRROR_URL" \
-            "refs/heads/main" | awk '{print $1}')
-          if [ -n "$MIRROR_MAIN_SHA" ]; then
-            git fetch "$MIRROR_URL" "refs/heads/main:refs/heads/_mirror_anchor"
-          else
-            echo "No main on mirror yet (first run); skipping anchor fetch."
-          fi
-          # Fetch the blob-anchor ref (if it exists) into a local ref.
-          # filter-repo's --replace-text creates scrubbed replacement
-          # blobs that get marks in target-marks but have no tree entry
-          # — they are unreachable from any ref. Without this anchor
-          # those blobs would be lost between runs.
-          BLOBS_SHA=$(git ls-remote "$MIRROR_URL" \
-            "refs/heads/filter-repo-blobs" | awk '{print $1}')
-          if [ -n "$BLOBS_SHA" ]; then
-            git fetch "$MIRROR_URL" "refs/heads/filter-repo-blobs:refs/heads/_target_blobs"
-          else
-            echo "No blob anchor on mirror yet (first run); skipping blob fetch."
-          fi
-          # Decide whether to honor the persisted marks. We honor them
-          # only if all three conditions hold: (1) the state branch is
-          # present, (2) the fingerprint matches, and (3) the SHAs in
-          # target-marks resolve in this clone. Any mismatch (or missing
-          # meta, or unresolvable marks) means stale marks: delete the
-          # local state branch so filter-repo starts clean, then write
-          # the new fingerprint. The push step at the end force-pushes
-          # the state and meta branches in lockstep.
-          REFILTER_REASON=""
-          if [ -z "$STATE_REMOTE_SHA" ]; then
-            REFILTER_REASON="first run (no state branch on mirror)"
-          elif [ -z "$STORED_FP" ]; then
-            REFILTER_REASON="meta branch missing or unreadable on mirror"
-          elif [ "$LIVE_FP" != "$STORED_FP" ]; then
-            REFILTER_REASON="filter inputs changed "\
-"(paths.allowlist, mailmap, or gitignore.mirror edited)"
-          fi
-          # Self-healing target-marks validation: verify that the SHAs
-          # in target-marks actually resolve in this clone. If any are
-          # missing, the marks are invalid for incremental use.
-          if [ -z "$REFILTER_REASON" ] && [ -n "$STATE_REMOTE_SHA" ]; then
-            if git show "$STATE_BRANCH:target-marks" >/dev/null 2>&1; then
-              MARK_SHAS=$(git show "$STATE_BRANCH:target-marks" | awk '{print $2}')
-              MISSING=$(echo "$MARK_SHAS" \
-                | git cat-file --batch-check='%(objectname) %(objecttype)' \
-                | grep ' missing$' || true)
-              if [ -n "$MISSING" ]; then
-                MISSING_COUNT=$(echo "$MISSING" | wc -l | tr -d ' ')
-                REFILTER_REASON="target-marks contain "\
-"$MISSING_COUNT unresolvable SHAs; "\
-"state branch is invalid for incremental use"
-              fi
-            fi
-          fi
-          if [ -n "$REFILTER_REASON" ]; then
-            echo "::warning::Refiltering from scratch: $REFILTER_REASON."
-            echo "::warning::This run will force-push the mirror's" \
-              "main and rewrite all public SHAs."
-            echo "::warning::Consumers of the mirror need a one-time" \
-              "'git fetch && git reset --hard origin/main'."
-            # Delete the local state branch (if we fetched one) so
-            # filter-repo doesn't inherit stale marks. The first run
-            # case has no local branch to delete, hence `|| true`.
-            git update-ref -d "refs/heads/$STATE_BRANCH" || true
-          else
-            echo "Filter inputs unchanged; reusing persisted marks from state branch."
-          fi
-          # Run filter-repo. --state-branch persists fast-import marks
-          # so unchanged source commits keep their previously-computed
-          # public SHAs across runs. --prune-empty=never sidesteps a
-          # documented interaction (filter-repo source ~lines 2233-2249)
-          # where empty-commit pruning fights with --state-branch.
-          # Trade-off: source commits that touch only excluded paths
-          # appear in the public mirror as empty commits with their
-          # original commit messages intact. This leaks two things
-          # about activity on excluded paths: the timing (commit dates)
-          # AND the commit message contents (which may name excluded
-          # directories or describe the change). The accepted cost for
-          # SHA stability; the diff payload itself stays excluded.
-          git filter-repo \
-            --paths-from-file "$CONF/paths.allowlist" \
-            --mailmap "$CONF/mailmap" \
-            --state-branch "$STATE_BRANCH" \
-            --prune-empty=never \
-            --refs refs/heads/main
-          # filter-repo has run and the freshness check is behind us, so
-          # it is now safe to add the named "mirror" remote. The
-          # Push step reuses this remote; both steps operate inside
-          # $FILTERED. (Adding it earlier would make `git remote` output
-          # two lines and abort filter-repo's from-scratch sanity check —
-          # see issue #144.)
-          git remote add mirror "$MIRROR_URL"
-          # Build a synthetic commit that anchors all target-mark blobs
-          # so they survive the next run's fetch. target-marks contains
-          # both commit and blob SHAs; use cat-file --batch-check to
-          # type-classify and build a tree from blobs only.
-          if git show "$STATE_BRANCH:target-marks" >/dev/null 2>&1; then
-            TYPES_FILE=$(mktemp)
-            git show "$STATE_BRANCH:target-marks" | awk '{print $2}' \
-              | git cat-file --batch-check='%(objectname) %(objecttype)' \
-              > "$TYPES_FILE"
-            UNEXPECTED=$(awk '$2 != "blob" && $2 != "commit" {print}' "$TYPES_FILE")
-            if [ -n "$UNEXPECTED" ]; then
-              echo "::error::Unexpected object types in target-marks:"
-              echo "$UNEXPECTED"
-              exit 1
-            fi
-            BLOB_COUNT=$(awk '$2 == "blob"' "$TYPES_FILE" | wc -l | tr -d ' ')
-            if [ "$BLOB_COUNT" -gt 0 ]; then
-              ANCHOR_TREE=$(awk \
-                '$2 == "blob" {printf "100644 blob %s\tmark-%d\n", $1, NR}' \
-                "$TYPES_FILE" | git mktree)
-              ANCHOR_COMMIT=$(GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' \
-                              GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' \
-                              git commit-tree "$ANCHOR_TREE" \
-                                -m "Anchor $BLOB_COUNT unreachable target-mark blobs")
-              git update-ref "refs/heads/filter-repo-blobs" "$ANCHOR_COMMIT"
-              echo "Built blob anchor: $BLOB_COUNT blobs, commit $ANCHOR_COMMIT"
-            else
-              echo "No blobs in target-marks; skipping blob anchor."
-            fi
-            rm -f "$TYPES_FILE"
-          else
-            echo "No target-marks in state branch; skipping blob anchor."
-          fi
-          # Write the live fingerprint into the meta branch so the
-          # next run can detect a config change. We build a fresh
-          # single-commit meta branch each run (history is meaningless
-          # here — only the current fingerprint matters), keeping the
-          # meta ref small and rebuildable. Pinned dates keep the SHA
-          # deterministic when the fingerprint hasn't changed, so a
-          # no-op meta push is a true no-op.
-          export GIT_INDEX_FILE="${RUNNER_TEMP}/meta-idx"
-          rm -f "$GIT_INDEX_FILE"
-          FP_BLOB=$(printf '%s\n' "$LIVE_FP" | git hash-object -w --stdin)
-          git update-index --add --cacheinfo "100644,$FP_BLOB,inputs.sha256"
-          META_TREE=$(git write-tree)
-          unset GIT_INDEX_FILE
-          # Identity comes from the clone's local git config (set in the
-          # filter step above); no inline -c flags needed. The pinned
-          # GIT_*_DATE env stays — it keeps this commit's SHA deterministic
-          # so an unchanged fingerprint yields a true no-op meta push.
-          META_COMMIT=$(GIT_AUTHOR_DATE='2000-01-01T00:00:00Z' \
-                        GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' \
-                        git commit-tree "$META_TREE" \
-                          -m "filter-repo inputs fingerprint: $LIVE_FP")
-          git update-ref "refs/heads/$META_BRANCH" "$META_COMMIT"
-          echo "FILTERED=$WORK/src.git" >> "$GITHUB_ENV"
-          echo "STATE_BRANCH=$STATE_BRANCH" >> "$GITHUB_ENV"
-          echo "META_BRANCH=$META_BRANCH" >> "$GITHUB_ENV"
-          echo "REFILTER_REASON=$REFILTER_REASON" >> "$GITHUB_ENV"
-
-      # NO post-filter synth steps. `CONTRIBUTORS` ships as a static
-      # tracked file on paths.allowlist, and the mirror's root
-      # `.gitignore` is renamed in from `gitignore.mirror` via the
-      # rename directive in paths.allowlist — both land INSIDE
-      # filter-repo's own commit. An earlier design synthesized these
-      # two files as commits ON TOP of filter-repo's output; those
-      # commits sat outside filter-repo's --state-branch marks and made
-      # every source-change run diverge from the previous mirror tip and
-      # force-push, breaking consumers' `git pull`. Shipping both through
-      # filter-repo means nothing is stacked on its output, so routine
-      # runs fast-forward.
-
-      - name: Push to mirror
-        run: |
-          set -euo pipefail
-          cd "$FILTERED"
-          # The mirror remote was added in the filter step *after*
-          # filter-repo ran (it cannot exist before, or filter-repo's
-          # from-scratch freshness check aborts on a second remote — see
-          # issue #144). The state/meta branches were read earlier via
-          # the $MIRROR_URL directly, without a named remote. Reuse the
-          # remote here; do not re-add it.
-          # Defense-in-depth: if the mirror's current refs/heads/main
-          # already matches our new tip, do not push main. Since nothing
-          # is stacked on filter-repo's output, the local tip IS
-          # filter-repo's output, so a no-source-change run reproduces
-          # the previous run's tip exactly and this keeps the no-op run
-          # from moving the remote tip.
-          LOCAL_TIP=$(git rev-parse refs/heads/main)
-          REMOTE_TIP=$(git ls-remote mirror refs/heads/main | awk '{print $1}')
-          # Asymmetric -n guard is deliberate: LOCAL_TIP is guaranteed
-          # non-empty (git rev-parse without --verify hard-fails under
-          # set -e if refs/heads/main is missing locally), while
-          # REMOTE_TIP is legitimately empty on a fresh mirror that has
-          # no refs/heads/main yet (bootstrap case — fall through to
-          # the push so the mirror gets its first commit).
-          if [ -n "$REMOTE_TIP" ] && [ "$LOCAL_TIP" = "$REMOTE_TIP" ]; then
-            echo "Mirror refs/heads/main already at $LOCAL_TIP;" \
-              "nothing to push to main."
-          else
-            if [ -n "$REFILTER_REASON" ]; then
-              echo "Refilter run — force-pushing main (history was rewritten)."
-              git push --force mirror refs/heads/main:refs/heads/main
-            else
-              echo "Incremental run — pushing main as fast-forward."
-              git push mirror refs/heads/main:refs/heads/main
-            fi
-          fi
-          # Always push the state, meta, and blob-anchor branches. They
-          # are bookkeeping for the next run; their tips legitimately
-          # change every run that produces filter-repo work (state
-          # branch), recomputes the fingerprint (meta branch — same SHA
-          # when fingerprint is unchanged, so this is a true no-op then),
-          # or updates the target-mark blob set (blob anchor — same SHA
-          # when the blob set is unchanged). Force-push because
-          # filter-repo may rewrite the state branch on a refilter, and
-          # the meta branch gets rebuilt fresh each run. The blob-anchor
-          # push is conditional: the ref may not exist on the first run
-          # or when target-marks contains no blobs.
-          PUSH_REFS=("refs/heads/$STATE_BRANCH:refs/heads/$STATE_BRANCH"
-                     "refs/heads/$META_BRANCH:refs/heads/$META_BRANCH")
-          if git show-ref --verify --quiet "refs/heads/filter-repo-blobs"; then
-            PUSH_REFS+=("refs/heads/filter-repo-blobs:refs/heads/filter-repo-blobs")
-          fi
-          git push --force mirror "${PUSH_REFS[@]}"
-```
+Render the workflow from `$PAYLOAD/public-mirror.yml` to
+`<repo-root>/.github/workflows/public-mirror.yml`, substituting
+`__GH_ORG__` with the owner and `__GH_REPO__` with the source short
+name. Those two placeholders appear in the `MIRROR_URL` env of the
+filter step (`git@github-mirror:__GH_ORG__/__GH_REPO__-public.git`)
+and `__GH_REPO__` also in the bot identity
+(`public-mirror@__GH_REPO__.local`). After rendering, confirm no
+`__...__` placeholder remains in the written file.
 
 Notes on the template:
 
@@ -735,9 +366,12 @@ Notes on the template:
   stacked on its output, so routine runs fast-forward.
 - All temporary files live under `${RUNNER_TEMP}` (the
   GitHub-recommended runner temp dir), not `/tmp/`.
-- Replace `<short>` in the `user.email` and `<owner>/<short>-public`
-  in the remote URL (and in `MIRROR_URL` in the filter step) with
-  real values when writing the file.
+- The `user.email` bot identity (`public-mirror@__GH_REPO__.local`) and
+  the mirror remote URL / `MIRROR_URL`
+  (`git@github-mirror:__GH_ORG__/__GH_REPO__-public.git`) carry the
+  `__GH_REPO__` / `__GH_ORG__` placeholders in the template; the render
+  step in Step 7 substitutes them. No hand-editing of the written file
+  is needed.
 - The bot git identity is set **once**, repo-locally, on the bare
   clone (`git config user.name` / `user.email` right after the
   `cd "$WORK/src.git"`), and every commit-creating path inherits it:
@@ -784,7 +418,8 @@ Notes on the template:
   walk every ref in the clone, including the anchor refs whose
   commits are target-side. A sibling `filter-repo-meta` branch
   holds a `inputs.sha256` fingerprint over `paths.allowlist`,
-  `mailmap`, and `gitignore.mirror`; on each run the live fingerprint
+  `mailmap`, `gitignore.mirror`, and the cleaned `replacements.txt`
+  rule set; on each run the live fingerprint
   is compared to the stored one,
   and a mismatch triggers a full refilter (which is logged with a
   GitHub `::warning::` annotation so the operator notices). A third
@@ -933,41 +568,35 @@ purpose here is purely to create a default branch.
 
 Files in the bootstrap commit:
 
-- `README.md` — read-only banner with upstream link.
-- `pull_request_template.md` — redirects contributions upstream.
-- Copies of `LICENSE`, `PATENTS`, `PRIOR_ART.md`, `CODEOWNERS`,
-  `CONTRIBUTORS` from the source repo, if they exist. If any of these
-  do not exist in the source, skip them silently — the workflow
-  will only ever publish what's in the source repo anyway.
+- `README.md` — read-only banner with upstream link (rendered from
+  `$PAYLOAD/README.md`).
+- `pull_request_template.md` — redirects contributions upstream
+  (rendered from `$PAYLOAD/pull_request_template.md`).
+- `LICENSE`, `PATENTS`, `PRIOR_ART.md`, `CODEOWNERS`, `CONTRIBUTORS`:
+  the source repo's own copy if it exists; otherwise the payload
+  starter (`$PAYLOAD/LICENSE`, `$PAYLOAD/PATENTS`,
+  `$PAYLOAD/PRIOR_ART.md`). `CODEOWNERS` has no payload starter — copy
+  it only if the source has it. `CONTRIBUTORS` was rendered to
+  `$REPO_ROOT/CONTRIBUTORS` in Step 6; copy that.
 - The mirror's root `.gitignore` from
   `.github/public-mirror/gitignore.mirror` (copied to `$BOOT/.gitignore`).
   Do NOT copy the source repo's own root `.gitignore` — the mirror
   ships `gitignore.mirror` instead, and the first real workflow run
   will produce the same `.gitignore` via the rename directive.
 
-### `README.md` bootstrap content
+The `README.md` and `pull_request_template.md` payload starters carry
+the read-only banner and PR-redirect text; render
+`$PAYLOAD/README.md` (substitute `__GH_ORG__` / `__GH_REPO__`) and
+`$PAYLOAD/pull_request_template.md` (no placeholders).
 
-```markdown
-# <short> (public mirror)
-
-> **Read-only mirror.** This repository is generated automatically
-> from the private upstream. All commits originate there. Do not
-> open issues or pull requests here — see the upstream repo for the
-> contribution process.
-
-Upstream: `<owner>/<short>` (private; access on request).
-```
-
-### `pull_request_template.md` bootstrap content
-
-```markdown
-This repository is a **read-only public mirror**. Pull requests are
-not accepted here.
-
-Please close this PR and open your change against the upstream
-private repository instead. The upstream maintainers can grant
-access if you need it.
-```
+The `PATENTS` and `PRIOR_ART.md` payload starters carry the
+`__GH_OWNER_NAME__` and `__RELEASE_DATE__` placeholders. These are
+**only** needed when the source repo lacks its own copy of those files.
+If a starter is needed, prompt the user for the owner name and the
+public-release date before rendering, per the
+`.global-claude-config/README.md` "Resolving placeholder values"
+rule (these two cannot be inferred). If the source already has the
+file, copy it verbatim and skip the prompt.
 
 Push sequence (run from the source repo root):
 
@@ -982,13 +611,18 @@ git init -b main
 Then populate the bootstrap directory as explicit, separate
 actions (do not bundle into a comment):
 
-1. Write `README.md` with the bootstrap content shown above.
-2. Write `pull_request_template.md` with the bootstrap content
-   shown above.
+1. Render `$PAYLOAD/README.md` (substitute `__GH_ORG__` /
+   `__GH_REPO__`) to `$BOOT/README.md`.
+2. Render `$PAYLOAD/pull_request_template.md` to
+   `$BOOT/pull_request_template.md`.
 3. For each of `LICENSE`, `PATENTS`, `PRIOR_ART.md`, `CODEOWNERS`,
-   `CONTRIBUTORS`: if the file exists at `$REPO_ROOT/<name>`, copy
-   it to `$BOOT/<name>`. Skip silently if the source file does
-   not exist.
+   `CONTRIBUTORS`: if the file exists at `$REPO_ROOT/<name>`, copy it
+   to `$BOOT/<name>`. Otherwise, for `LICENSE` / `PATENTS` /
+   `PRIOR_ART.md`, render the payload starter
+   (`$PAYLOAD/<name>` — `PATENTS` and `PRIOR_ART.md` need the
+   `__GH_OWNER_NAME__` / `__RELEASE_DATE__` prompt above) to
+   `$BOOT/<name>`. `CODEOWNERS` has no starter; skip silently when
+   absent. `CONTRIBUTORS` always exists (rendered in Step 6).
 4. Copy `$REPO_ROOT/.github/public-mirror/gitignore.mirror` to
    `$BOOT/.gitignore` (the mirror's root `.gitignore`). Do NOT copy
    the source repo's own `$REPO_ROOT/.gitignore`.
@@ -1064,7 +698,8 @@ Notes:
   cases still require force:
   - The first run after this skill is set up (no persisted state
     yet) and any later run that detects a filter-input change
-    (`paths.allowlist`, `mailmap`, or `gitignore.mirror` edited)
+    (`paths.allowlist`, `mailmap`, `gitignore.mirror`, or the
+    `replacements.txt` rule set edited)
     rebuilds the public history from scratch — both will force-push
     `main` once.
   - The bookkeeping branches (`filter-repo-state`,
@@ -1139,6 +774,7 @@ Uncommitted in this repo (review and commit when ready):
   - .github/public-mirror/paths.allowlist
   - .github/public-mirror/mailmap
   - .github/public-mirror/gitignore.mirror
+  - .github/public-mirror/replacements.txt
   - CONTRIBUTORS
   - .github/workflows/public-mirror.yml
 
@@ -1217,9 +853,11 @@ the plumbing steps that are safe once the tree has been approved.
 
 ## Hard constraints
 
-- **Never run before all pre-flight checks (Steps 1–3) pass.**
+- **Never run before all pre-flight checks (Steps 0–3) pass.**
   Each abort message must name the exact thing that failed and
-  what the user should do about it.
+  what the user should do about it. Step 0 aborts with the standard
+  `.global-claude-config/README.md` existence-check message if the
+  payload directory is missing.
 - **Never write or commit the source-repo files for the user.**
   Step 6 and Step 7 create the files on disk uncommitted; the user
   reviews the diff and commits manually. (Global rule §0: never
@@ -1227,10 +865,13 @@ the plumbing steps that are safe once the tree has been approved.
 - **Never edit anything outside the source repo.** The skill
   writes files under `<repo-root>/.github/public-mirror/`,
   `<repo-root>/.github/workflows/`, and
-  `<repo-root>/.claude/tmp/repo-public-mirror-setup/`. Nothing
-  outside the source repo gets touched on disk; the only remote
-  changes are on the newly-created mirror and the
-  `PUBLIC_MIRROR_DEPLOY_KEY` secret on the source.
+  `<repo-root>/.claude/tmp/repo-public-mirror-setup/`. It **reads**
+  templates from
+  `~/.claude/global-claude-config/repo-public-mirror-setup/`
+  (read-only — never written to). Nothing outside the source repo
+  gets touched on disk; the only remote changes are on the
+  newly-created mirror and the `PUBLIC_MIRROR_DEPLOY_KEY` secret on
+  the source.
 - **Never skip a halt.** All three halts (Steps 5, 8, 10) are
   required. A "looks fine, proceeding" response without explicit
   user confirmation is not approval.
