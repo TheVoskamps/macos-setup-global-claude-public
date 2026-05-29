@@ -194,16 +194,41 @@ LICENSE
 PATENTS
 PRIOR_ART.md
 CODEOWNERS
-.github/public-mirror/
+CONTRIBUTORS
 .github/workflows/public-mirror.yml
 pull_request_template.md
 
-# Do NOT add `.gitignore` here — it is synthesized by the workflow
-# from this allowlist (strip comments/blanks, prefix `!/`, prepend
-# `/*`). The allowlist drives the synthesis, not the other way around.
+# Do NOT add the source repo's own root `.gitignore`, or most of
+# `.github/`. The source `.gitignore` un-ignores paths that exist in
+# the private repo but are deliberately EXCLUDED from the mirror, so a
+# consumer's `git status` would reference rules for paths absent from
+# their clone. The mirror ships a distinct, hand-maintained
+# `gitignore.mirror` (renamed to root `.gitignore` by the rename
+# directive below) instead. `.github/` is upstream-only plumbing — the
+# ONE exception is `.github/public-mirror/gitignore.mirror`.
 
 # --- repo-specific (add below) ---
+
+# --- mirror .gitignore: the ONE path under .github/ that survives ---
+# Select `.github/public-mirror/gitignore.mirror` AND rename it to
+# repo-root `.gitignore` on the mirror. filter-repo's
+# --paths-from-file consumes the `==>` rename directive inline. NOTE:
+# in the installed filter-repo version a rename directive does NOT by
+# itself select the source path — it selects *and* renames only when
+# the source path is ALSO present as a plain selection line, so list
+# the source path on its own line first, then the rename directive.
+.github/public-mirror/gitignore.mirror
+.github/public-mirror/gitignore.mirror==>.gitignore
 ```
+
+Note that `CONTRIBUTORS` is shipped like any other allowlisted path
+(it is a static tracked file in the source repo — see the next
+section), and `.github/public-mirror/` is no longer wholesale on the
+allowlist: only `gitignore.mirror` survives, renamed to root
+`.gitignore`. Shipping both files through `git-filter-repo` (rather
+than synthesizing them as commits on top of filter-repo's output) is
+what keeps the mirror fast-forwarding on routine runs instead of
+diverging and force-pushing.
 
 ### `mailmap`
 
@@ -238,13 +263,22 @@ Prepend a comment header:
 If `git log` returns zero authors (empty repo), still write the
 header so the file exists. Do not invent entries.
 
-### `CONTRIBUTORS.template`
+### `CONTRIBUTORS` (static, at the source repo root)
 
-Write the header that the workflow concatenates with the
-regenerated `git shortlog -sne refs/heads/main` body each run
-(excluding the mirror bot). Embed the literal
-source short name in the upstream URL placeholder so the message
-makes sense in the mirror:
+`CONTRIBUTORS` is a **static tracked file** at the source repo root.
+It ships to the mirror like any other allowlisted path. It is NOT
+synthesized at runtime: an earlier design regenerated it as a commit
+stacked on top of filter-repo's output, which sat outside
+filter-repo's persisted state and made every source-change run diverge
+from the previous mirror tip and force-push, breaking consumers'
+`git pull`. Shipping it as a normal tracked file removes that synth
+step entirely.
+
+Write it at `$REPO_ROOT/CONTRIBUTORS`. The body is a one-time
+(refreshed by hand when desired) `git shortlog -sne refs/heads/main`
+against the rewritten history, with the mirror bot excluded. Embed the
+literal source short name in the upstream URL placeholder so the
+message makes sense in the mirror:
 
 ```text
 # Contributors
@@ -254,15 +288,55 @@ originate upstream in the private source repository. Contributions
 are not accepted in this mirror — see the upstream repo for the
 contribution process.
 
-The list below is regenerated on every workflow run from filtered
-`git shortlog -sne refs/heads/main` against the rewritten history
-(the mirror bot is excluded), so emails are
-in the `<localpart>@<short>.local` form.
+This is a **static informational file**, shipped to the mirror by
+`git-filter-repo` like any other allowlisted path. Refresh it by hand
+when desired, by regenerating the filtered `git shortlog -sne` against
+the rewritten history (emails are in the `<localpart>@<short>.local`
+form). It is no longer synthesized as a commit on top of filter-repo's
+output.
 
 ---
 ```
 
-Replace `<short>` with the actual source short name when writing.
+Replace `<short>` with the actual source short name when writing. The
+source repo must **track** this file — if the source `.gitignore`
+ignores root-level files by default, add an explicit `!/CONTRIBUTORS`
+un-ignore so it is committed and therefore ships.
+
+### `gitignore.mirror` (the mirror's root `.gitignore`)
+
+Write `.github/public-mirror/gitignore.mirror`: the **static** root
+`.gitignore` for the mirror. The rename directive in `paths.allowlist`
+selects it and renames it to repo-root `.gitignore` on the mirror, so
+it ships inside `git-filter-repo`'s own commit — not as a synthesized
+post-filter commit.
+
+The mirror needs its OWN `.gitignore` rather than the source repo's:
+the source `.gitignore` un-ignores paths that exist privately but are
+deliberately excluded from the mirror, so shipping it would leave a
+consumer's `git status` referencing rules for paths absent from their
+clone. `gitignore.mirror` un-ignores exactly the mirror's shipped set
+plus the `.gitignore` itself, so a user who clones the mirror beneath
+`~/.claude` gets a clean `git status`.
+
+Keep it in sync **by hand** with `paths.allowlist`: when you add or
+remove a shipped path there, add or remove the matching `!/<path>`
+line here. It is part of the input fingerprint (see Step 7), so
+editing it correctly triggers a refilter. Pattern:
+
+```text
+# Ignore everything by default, then un-ignore shipped files.
+/*
+
+# The .gitignore itself must not be ignored.
+!/.gitignore
+
+# Shipped paths (keep in sync with paths.allowlist):
+!/README.md
+!/LICENSE
+# ... one `!/<path>` line per shipped path; directories also get
+# a recursive `!/<dir>**` line so nested contents are un-ignored.
+```
 
 ## Step 7: Write `.github/workflows/public-mirror.yml`
 
@@ -276,12 +350,15 @@ into local anchor refs (so all target-side objects referenced in
 with `--paths-from-file`, `--mailmap`, `--state-branch`,
 `--prune-empty=never`, and `--refs refs/heads/main` (with a
 fingerprint check that triggers a full refilter when
-`paths.allowlist` or `mailmap` changes), build a blob-anchor
-commit for unreachable replacement blobs, regenerate `CONTRIBUTORS`
-(skipped when the blob is unchanged), and push to the mirror's
-`main` (skipped when the new local tip already equals the mirror's
-current tip; force-pushed only on from-scratch refilters) plus the
-three bookkeeping branches (always force-pushed).
+`paths.allowlist`, `mailmap`, or `gitignore.mirror` changes), build a
+blob-anchor commit for unreachable replacement blobs, and push to the
+mirror's `main` (skipped when the new local tip already equals the
+mirror's current tip; force-pushed only on from-scratch refilters,
+fast-forwarded on incremental runs) plus the three bookkeeping
+branches (always force-pushed). `CONTRIBUTORS` ships as a static
+tracked file and `gitignore.mirror` is renamed to root `.gitignore` —
+both through `git-filter-repo` itself, so there are no post-filter
+synth steps.
 
 Use this template, substituting `<owner>/<short>-public` for the
 mirror's full name in both the remote URL near the end AND the
@@ -352,7 +429,7 @@ jobs:
           cd "$WORK/src.git"
           # Set the bot identity once, repo-locally, on this bare clone.
           # All commit-creating paths in this job draw from it: the
-          # meta-branch commit and the CONTRIBUTORS commit below, AND
+          # meta-branch commit and the blob-anchor commit below, AND
           # filter-repo's OWN internal --state-branch mark-saving commit
           # (git_filter_repo.py's `git -C . commit-tree`, which carries
           # no -c identity flags of its own). The GitHub-hosted runner
@@ -378,10 +455,17 @@ jobs:
           # push step. See issue #144.
           # Compute a fingerprint of the filter inputs so we can
           # detect config changes that invalidate the persisted marks.
-          # If paths.allowlist or mailmap changed since the last run,
-          # filter-repo's previously-computed SHAs no longer reflect
-          # the current filter, and we must refilter from scratch.
+          # If paths.allowlist, mailmap, or gitignore.mirror changed
+          # since the last run, filter-repo's previously-computed SHAs no
+          # longer reflect the current filter, and we must refilter from
+          # scratch. gitignore.mirror is MANDATORY in the fingerprint:
+          # its content becomes the mirror's root `.gitignore` blob via
+          # the rename directive in paths.allowlist, yet editing it does
+          # NOT change paths.allowlist — without hashing it here, the
+          # marks would be reused and the mirror's `.gitignore` would go
+          # silently stale relative to gitignore.mirror.
           LIVE_FP=$(cat "$CONF/paths.allowlist" "$CONF/mailmap" \
+                    "$CONF/gitignore.mirror" \
                     | sha256sum | awk '{print $1}')
           echo "Live filter-input fingerprint: $LIVE_FP"
           # Probe the mirror for the persisted state and meta branches.
@@ -451,7 +535,8 @@ jobs:
           elif [ -z "$STORED_FP" ]; then
             REFILTER_REASON="meta branch missing or unreadable on mirror"
           elif [ "$LIVE_FP" != "$STORED_FP" ]; then
-            REFILTER_REASON="filter inputs changed (paths.allowlist or mailmap edited)"
+            REFILTER_REASON="filter inputs changed "\
+"(paths.allowlist, mailmap, or gitignore.mirror edited)"
           fi
           # Self-healing target-marks validation: verify that the SHAs
           # in target-marks actually resolve in this clone. If any are
@@ -568,118 +653,17 @@ jobs:
           echo "META_BRANCH=$META_BRANCH" >> "$GITHUB_ENV"
           echo "REFILTER_REASON=$REFILTER_REASON" >> "$GITHUB_ENV"
 
-      - name: Regenerate CONTRIBUTORS
-        env:
-          CONF: ${{ github.workspace }}/.github/public-mirror
-        run: |
-          set -euo pipefail
-          cd "$FILTERED"
-          # Build the new file content in $RUNNER_TEMP (the bare clone
-          # has no working tree to write into), then insert it as a
-          # blob and synthesize a new tree that adds the CONTRIBUTORS
-          # entry on top of HEAD's existing tree.
-          {
-            cat "$CONF/CONTRIBUTORS.template"
-            echo
-            # Exclude the public-mirror bot: it authors only the synthetic
-            # CONTRIBUTORS and .gitignore commits — including it creates a
-            # self-referential count loop (its count grows each run).
-            git shortlog -sne refs/heads/main | grep -vF 'public-mirror@<short>.local' || true
-          } > "${RUNNER_TEMP}/CONTRIBUTORS"
-          BLOB=$(git hash-object -w "${RUNNER_TEMP}/CONTRIBUTORS")
-          # Short-circuit: if the freshly-generated CONTRIBUTORS blob
-          # is byte-identical to the one already at HEAD:CONTRIBUTORS,
-          # do not synthesize a new commit. Skipping the commit here
-          # keeps refs/heads/main pointing at the filter-repo output,
-          # so a no-source-change run produces a tip SHA identical to
-          # the previous run's tip and the push downstream becomes
-          # a no-op (tip-equality short-circuit).
-          HEAD_BLOB=$(git rev-parse --verify --quiet HEAD:CONTRIBUTORS || true)
-          if [ -n "$HEAD_BLOB" ] && [ "$BLOB" = "$HEAD_BLOB" ]; then
-            echo "CONTRIBUTORS unchanged (blob $BLOB); skipping synthetic commit."
-            exit 0
-          fi
-          # Reuse HEAD's tree as the base, then overlay the new blob
-          # via a temporary index. read-tree loads HEAD's tree into
-          # the index; update-index --add registers the new blob;
-          # write-tree emits the resulting tree SHA.
-          export GIT_INDEX_FILE="${RUNNER_TEMP}/idx"
-          rm -f "$GIT_INDEX_FILE"
-          git read-tree HEAD
-          git update-index --add --cacheinfo "100644,$BLOB,CONTRIBUTORS"
-          NEW_TREE=$(git write-tree)
-          unset GIT_INDEX_FILE
-          # Pin author/committer dates to HEAD's committer date so the
-          # synthetic commit's SHA is deterministic across runs. Using
-          # wall-clock here would change the tip SHA on every run even
-          # when nothing else changed, which is the root cause of the
-          # spurious force-pushes consumers see.
-          # Identity comes from the clone's local git config, set in the
-          # filter step on the SAME bare clone we cd into here ($FILTERED
-          # == $WORK/src.git). Local config lives in that clone's config
-          # file and persists across run blocks, so this separate shell
-          # sees it; no inline -c flags needed. The pinned GIT_*_DATE env
-          # stays — it keeps the synthetic commit's SHA deterministic.
-          HEAD_DATE=$(git show -s --format=%cI HEAD)
-          NEW_HEAD=$(GIT_AUTHOR_DATE="$HEAD_DATE" \
-                     GIT_COMMITTER_DATE="$HEAD_DATE" \
-                     git commit-tree "$NEW_TREE" -p HEAD \
-                       -m 'Regenerate CONTRIBUTORS')
-          git update-ref refs/heads/main "$NEW_HEAD"
-
-      - name: Synthesize .gitignore
-        env:
-          CONF: ${{ github.workspace }}/.github/public-mirror
-        run: |
-          set -euo pipefail
-          cd "$FILTERED"
-          # Synthesize a mirror-specific .gitignore from paths.allowlist.
-          # The mirror is cloned underneath a user's ~/.claude, so without
-          # a .gitignore, `git status` surfaces the user's surrounding
-          # runtime files (sessions, caches, secrets, etc.). The transform
-          # is mechanical: strip comments and blanks from the allowlist,
-          # prefix each surviving line with `!/` to form a negation rule,
-          # and prepend `/*` to ignore everything by default. The result
-          # un-ignores exactly the shipped set plus the .gitignore itself.
-          {
-            echo '# Auto-generated by public-mirror.yml from paths.allowlist.'
-            echo '# Do not edit — changes are overwritten on the next mirror push.'
-            echo ''
-            echo '# Ignore everything by default, then un-ignore shipped files.'
-            echo '/*'
-            echo ''
-            echo '# The .gitignore itself must not be ignored.'
-            echo '!/.gitignore'
-            echo ''
-            echo '# Shipped paths (synthesized from paths.allowlist):'
-            sed -n \
-              '/^[[:space:]]*$/d; /^[[:space:]]*#/d; p' \
-              "$CONF/paths.allowlist" \
-              | while IFS= read -r path; do
-                  echo "!/${path}"
-                  case "$path" in
-                    */) echo "!/${path}**" ;;
-                  esac
-                done
-          } > "${RUNNER_TEMP}/.gitignore"
-          BLOB=$(git hash-object -w "${RUNNER_TEMP}/.gitignore")
-          HEAD_BLOB=$(git rev-parse --verify --quiet HEAD:.gitignore || true)
-          if [ -n "$HEAD_BLOB" ] && [ "$BLOB" = "$HEAD_BLOB" ]; then
-            echo ".gitignore unchanged (blob $BLOB); skipping synthetic commit."
-            exit 0
-          fi
-          export GIT_INDEX_FILE="${RUNNER_TEMP}/gitignore-idx"
-          rm -f "$GIT_INDEX_FILE"
-          git read-tree HEAD
-          git update-index --add --cacheinfo "100644,$BLOB,.gitignore"
-          NEW_TREE=$(git write-tree)
-          unset GIT_INDEX_FILE
-          HEAD_DATE=$(git show -s --format=%cI HEAD)
-          NEW_HEAD=$(GIT_AUTHOR_DATE="$HEAD_DATE" \
-                     GIT_COMMITTER_DATE="$HEAD_DATE" \
-                     git commit-tree "$NEW_TREE" -p HEAD \
-                       -m 'Synthesize .gitignore from paths.allowlist')
-          git update-ref refs/heads/main "$NEW_HEAD"
+      # NO post-filter synth steps. `CONTRIBUTORS` ships as a static
+      # tracked file on paths.allowlist, and the mirror's root
+      # `.gitignore` is renamed in from `gitignore.mirror` via the
+      # rename directive in paths.allowlist — both land INSIDE
+      # filter-repo's own commit. An earlier design synthesized these
+      # two files as commits ON TOP of filter-repo's output; those
+      # commits sat outside filter-repo's --state-branch marks and made
+      # every source-change run diverge from the previous mirror tip and
+      # force-push, breaking consumers' `git pull`. Shipping both through
+      # filter-repo means nothing is stacked on its output, so routine
+      # runs fast-forward.
 
       - name: Push to mirror
         run: |
@@ -692,10 +676,11 @@ jobs:
           # the $MIRROR_URL directly, without a named remote. Reuse the
           # remote here; do not re-add it.
           # Defense-in-depth: if the mirror's current refs/heads/main
-          # already matches our new tip, do not push main. This catches
-          # any case the CONTRIBUTORS short-circuit above misses (and
-          # keeps no-op runs from moving the remote tip even if the
-          # filter output is identical for some other reason).
+          # already matches our new tip, do not push main. Since nothing
+          # is stacked on filter-repo's output, the local tip IS
+          # filter-repo's output, so a no-source-change run reproduces
+          # the previous run's tip exactly and this keeps the no-op run
+          # from moving the remote tip.
           LOCAL_TIP=$(git rev-parse refs/heads/main)
           REMOTE_TIP=$(git ls-remote mirror refs/heads/main | awk '{print $1}')
           # Asymmetric -n guard is deliberate: LOCAL_TIP is guaranteed
@@ -737,16 +722,17 @@ jobs:
 
 Notes on the template:
 
-- The `Regenerate CONTRIBUTORS` step works against a **bare clone**
-  (no working tree), so it cannot just `git add CONTRIBUTORS &&
-  git commit`. Instead it inserts the new file content as a blob
-  with `git hash-object -w`, overlays that blob onto HEAD's tree
-  via a temporary index (`GIT_INDEX_FILE` pointed at
-  `${RUNNER_TEMP}/idx`, `read-tree` + `update-index --cacheinfo` +
-  `write-tree`), and then uses `commit-tree` to wrap the new tree
-  in a single synthetic commit on top of the filtered history.
-  The synthetic commit doesn't dirty any of the rewritten commits'
-  SHAs upstream of it.
+- There are **no post-filter synth steps**. `CONTRIBUTORS` ships as a
+  static tracked file at the source repo root (on `paths.allowlist`),
+  and the mirror's root `.gitignore` is renamed in from
+  `gitignore.mirror` by the rename directive in `paths.allowlist`.
+  Both land inside `git-filter-repo`'s own commit. An earlier design
+  synthesized these two files as commits stacked on top of
+  filter-repo's output; those commits sat outside filter-repo's
+  `--state-branch` marks and made every source-change run diverge from
+  the previous mirror tip and force-push, breaking consumers'
+  `git pull`. Shipping both through filter-repo means nothing is
+  stacked on its output, so routine runs fast-forward.
 - All temporary files live under `${RUNNER_TEMP}` (the
   GitHub-recommended runner temp dir), not `/tmp/`.
 - Replace `<short>` in the `user.email` and `<owner>/<short>-public`
@@ -755,8 +741,8 @@ Notes on the template:
 - The bot git identity is set **once**, repo-locally, on the bare
   clone (`git config user.name` / `user.email` right after the
   `cd "$WORK/src.git"`), and every commit-creating path inherits it:
-  the meta-branch commit, the `CONTRIBUTORS` commit, and
-  filter-repo's own internal `--state-branch` mark-saving commit
+  the meta-branch commit, the blob-anchor commit, and filter-repo's
+  own internal `--state-branch` mark-saving commit
   (`git_filter_repo.py`'s `git -C . commit-tree`, which carries no
   identity flags). Do not re-decorate individual `commit-tree` calls
   with inline `-c user.name=… -c user.email=…` — that per-commit
@@ -769,24 +755,22 @@ Notes on the template:
   rewrites these bookkeeping commits' identities anyway.
 - `concurrency: public-mirror` prevents overlapping force-pushes if
   two pushes land on `main` close together.
-- The `Regenerate CONTRIBUTORS` step pins `GIT_AUTHOR_DATE` and
-  `GIT_COMMITTER_DATE` to HEAD's committer date before
-  `commit-tree`, so the synthetic commit's SHA is derived
-  deterministically from upstream rather than from wall-clock. It
-  also short-circuits when the freshly-generated `CONTRIBUTORS`
-  blob already equals the one at `HEAD:CONTRIBUTORS`, leaving
-  `refs/heads/main` at the filter-repo output unchanged.
-- The `Synthesize .gitignore` step uses the same bare-clone pattern as
-  `CONTRIBUTORS`: build the blob in `${RUNNER_TEMP}`, compare to
-  `HEAD:.gitignore`, skip the synthetic commit when unchanged, and pin
-  dates to HEAD's committer date for deterministic SHAs. The transform
-  strips comments and blank lines from `paths.allowlist`, prefixes each
-  surviving path with `!/`, and prepends `/*` (ignore everything by
-  default). Directory paths (trailing `/`) also get a recursive
-  `!/<dir>**` entry so nested contents are un-ignored. The resulting
-  `.gitignore` un-ignores exactly the shipped set plus itself, so a
-  user who clones the mirror underneath `~/.claude` gets a clean
-  `git status`.
+- `CONTRIBUTORS` is a static tracked file in the source repo, shipped
+  by filter-repo like any other allowlisted path. Refresh it by hand
+  (regenerate `git shortlog -sne` against the rewritten history,
+  excluding the mirror bot) when desired. Because it is a normally
+  tracked source file, editing it is a source commit handled by
+  filter-repo's normal incremental path — it is deliberately NOT in
+  the input fingerprint.
+- `gitignore.mirror` becomes the mirror's root `.gitignore` via the
+  rename directive in `paths.allowlist`. It un-ignores exactly the
+  shipped set plus the `.gitignore` itself (with a recursive
+  `!/<dir>**` line for each shipped directory), so a user who clones
+  the mirror underneath `~/.claude` gets a clean `git status`. It is
+  kept in sync with `paths.allowlist` BY HAND and is part of the input
+  fingerprint, so editing it triggers a refilter — without that, the
+  mirror's `.gitignore` could go silently stale relative to
+  `gitignore.mirror`.
 - The `Filter into a fresh bare clone with persisted marks` step
   uses `git filter-repo --state-branch filter-repo-state` so the
   fast-import marks (source-commit → public-commit SHA mapping)
@@ -799,8 +783,9 @@ Notes on the template:
   anchor/blob refs; without it, filter-repo's default `--all` would
   walk every ref in the clone, including the anchor refs whose
   commits are target-side. A sibling `filter-repo-meta` branch
-  holds a `inputs.sha256` fingerprint of `paths.allowlist` + `mailmap`;
-  on each run the live fingerprint is compared to the stored one,
+  holds a `inputs.sha256` fingerprint over `paths.allowlist`,
+  `mailmap`, and `gitignore.mirror`; on each run the live fingerprint
+  is compared to the stored one,
   and a mismatch triggers a full refilter (which is logged with a
   GitHub `::warning::` annotation so the operator notices). A third
   `filter-repo-blobs` branch anchors unreachable replacement blobs
@@ -821,11 +806,12 @@ Notes on the template:
   carefully before adopting the skill.
 - The `Push to mirror` step compares the new local tip to the
   mirror's current `refs/heads/main` (`git ls-remote`) and skips the
-  `main` push when they match. This is defense in depth on top of
-  the CONTRIBUTORS short-circuit — together with `--state-branch`
-  they make both no-source-change runs AND genuine-source-change
-  runs (where new commits add to the public tip without rewriting
-  history below) consumer-friendly. When the tips differ, the step
+  `main` push when they match. Because nothing is stacked on
+  filter-repo's output, the local tip IS filter-repo's output —
+  together with `--state-branch` this makes both no-source-change runs
+  AND genuine-source-change runs (where new commits add to the public
+  tip without rewriting history below) consumer-friendly. When the
+  tips differ, the step
   checks `REFILTER_REASON`: on a from-scratch refilter (non-empty
   reason) it force-pushes main (history was rewritten); on an
   incremental run (empty reason) it pushes without `--force` so
@@ -950,9 +936,14 @@ Files in the bootstrap commit:
 - `README.md` — read-only banner with upstream link.
 - `pull_request_template.md` — redirects contributions upstream.
 - Copies of `LICENSE`, `PATENTS`, `PRIOR_ART.md`, `CODEOWNERS`,
-  `.gitignore` from the source repo, if they exist. If any of these
+  `CONTRIBUTORS` from the source repo, if they exist. If any of these
   do not exist in the source, skip them silently — the workflow
   will only ever publish what's in the source repo anyway.
+- The mirror's root `.gitignore` from
+  `.github/public-mirror/gitignore.mirror` (copied to `$BOOT/.gitignore`).
+  Do NOT copy the source repo's own root `.gitignore` — the mirror
+  ships `gitignore.mirror` instead, and the first real workflow run
+  will produce the same `.gitignore` via the rename directive.
 
 ### `README.md` bootstrap content
 
@@ -995,9 +986,12 @@ actions (do not bundle into a comment):
 2. Write `pull_request_template.md` with the bootstrap content
    shown above.
 3. For each of `LICENSE`, `PATENTS`, `PRIOR_ART.md`, `CODEOWNERS`,
-   `.gitignore`: if the file exists at `$REPO_ROOT/<name>`, copy
+   `CONTRIBUTORS`: if the file exists at `$REPO_ROOT/<name>`, copy
    it to `$BOOT/<name>`. Skip silently if the source file does
    not exist.
+4. Copy `$REPO_ROOT/.github/public-mirror/gitignore.mirror` to
+   `$BOOT/.gitignore` (the mirror's root `.gitignore`). Do NOT copy
+   the source repo's own `$REPO_ROOT/.gitignore`.
 
 Then commit and push:
 
@@ -1070,8 +1064,9 @@ Notes:
   cases still require force:
   - The first run after this skill is set up (no persisted state
     yet) and any later run that detects a filter-input change
-    (`paths.allowlist` or `mailmap` edited) rebuilds the public
-    history from scratch — both will force-push `main` once.
+    (`paths.allowlist`, `mailmap`, or `gitignore.mirror` edited)
+    rebuilds the public history from scratch — both will force-push
+    `main` once.
   - The bookkeeping branches (`filter-repo-state`,
     `filter-repo-meta`, and `filter-repo-blobs`) are always pushed
     with `--force` because `filter-repo` may rewrite the state
@@ -1143,7 +1138,8 @@ Created on GitHub:
 Uncommitted in this repo (review and commit when ready):
   - .github/public-mirror/paths.allowlist
   - .github/public-mirror/mailmap
-  - .github/public-mirror/CONTRIBUTORS.template
+  - .github/public-mirror/gitignore.mirror
+  - CONTRIBUTORS
   - .github/workflows/public-mirror.yml
 
 Next steps:
@@ -1171,13 +1167,15 @@ Next steps:
      update. The previous public history's SHAs are unchanged
      because `--state-branch` reused them.
 
-When you later edit the filter config (paths.allowlist or
-mailmap), the next workflow run detects the input change via the
-fingerprint stored on filter-repo-meta, logs a warning
+When you later edit the filter config (paths.allowlist, mailmap, or
+gitignore.mirror), the next workflow run detects the input change via
+the fingerprint stored on filter-repo-meta, logs a warning
 "Refiltering from scratch: filter inputs changed", and
 force-pushes a rebuilt main. Tell consumers of the mirror to do
 a one-time `git fetch && git reset --hard origin/main` after a
-config-change run.
+config-change run. (Editing the static CONTRIBUTORS file is NOT a
+config change — it is a normal source commit that the incremental
+path fast-forwards.)
 
 If the first real workflow run fails, common causes:
   - paths.allowlist references a path that doesn't exist in

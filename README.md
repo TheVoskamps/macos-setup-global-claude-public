@@ -57,15 +57,17 @@ In order:
 
 ### Resync after a history rewrite
 
-Before May 27, 2026 (9:37 PM PDT), every mirror run rewrote the
-`CONTRIBUTORS` file — the shortlog walked bookkeeping refs whose
-commit count grew each run, producing a different blob every time.
-This caused a new synthetic commit on every run even when no real
-contributors changed. That is now fixed.
+Before May 28, 2026 (10:00 PM PDT), the mirror workflow built the
+`CONTRIBUTORS` and `.gitignore` files as synthetic commits stacked on
+top of `git-filter-repo`'s output. Those commits sat outside
+filter-repo's persisted state, so every source-change run diverged
+from the previous mirror tip and had to be force-pushed — which broke
+`git pull`. Both files now ship through `git-filter-repo` itself, so
+routine runs fast-forward. That is now fixed.
 
-If you cloned or pulled before that date, your local copy has the
-old history. A regular `git pull` will fail with a diverged-history
-error. Reset once to pick up the clean history:
+If you cloned or pulled before that date, your local copy has the old
+history. A regular `git pull` will fail with a diverged-history error.
+Reset once to pick up the clean history — this is the last such reset:
 
 ```sh
 git -C ~/.claude fetch origin
