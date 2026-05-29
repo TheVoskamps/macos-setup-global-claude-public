@@ -126,6 +126,16 @@ problem entirely rather than working around it.
 
 ### Rules inside an `isolation: worktree` subagent
 
+- **Edit/Write/MultiEdit are guarded by the `worktree-file-guard.sh`
+  PreToolUse hook.** If the resolved absolute `file_path` falls
+  outside the active worktree root, the hook denies the call and
+  names the correct worktree-anchored path. This prevents the
+  silent primary-clone leak described in issue #188 (and upstream
+  anthropics/claude-code#62547). The hook only engages when the
+  session's `git rev-parse --show-toplevel` matches a
+  `.claude/worktrees/agent-*` path; the main session is unaffected.
+  Anchor every absolute path to `$(git rev-parse --show-toplevel)`
+  so the hook does not need to fire.
 - Run all commands as **bare commands**. The cwd is already the
   worktree root.
 - A subagent **may** use `cd <subdir> && <cmd>` in a **single Bash
